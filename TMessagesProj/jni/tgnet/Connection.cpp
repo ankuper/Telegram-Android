@@ -638,7 +638,7 @@ inline void Connection::encryptKeyWithSecret(uint8_t *bytes, uint8_t secretType)
     std::string *currentSecret = getCurrentSecret(secretType);
     size_t a = 0;
     size_t size = std::min((size_t) 16, currentSecret->length());
-    if (currentSecret->length() >= 17 && ((*currentSecret)[0] == '\xdd' || (*currentSecret)[0] == '\xee')) {
+    if (currentSecret->length() >= 17 && ((*currentSecret)[0] == '\xdd' || (*currentSecret)[0] == '\xee' || (uint8_t)(*currentSecret)[0] == 0xff)) {
         a = 1;
         size = 17;
     }

@@ -223,13 +223,14 @@ void applyDatacenterAddress(JNIEnv *env, jclass c, jint instanceNum, jint datace
     }
 }
 
-void setProxySettings(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret) {
+void setProxySettings(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret, jstring wsPath) {
     const char *addressStr = env->GetStringUTFChars(address, 0);
     const char *usernameStr = env->GetStringUTFChars(username, 0);
     const char *passwordStr = env->GetStringUTFChars(password, 0);
     const char *secretStr = env->GetStringUTFChars(secret, 0);
+    const char *wsPathStr = env->GetStringUTFChars(wsPath, 0);
 
-    ConnectionsManager::getInstance(instanceNum).setProxySettings(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr);
+    ConnectionsManager::getInstance(instanceNum).setProxySettings(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr, wsPathStr);
 
     if (addressStr != 0) {
         env->ReleaseStringUTFChars(address, addressStr);
@@ -242,6 +243,9 @@ void setProxySettings(JNIEnv *env, jclass c, jint instanceNum, jstring address, 
     }
     if (secretStr != 0) {
         env->ReleaseStringUTFChars(secret, secretStr);
+    }
+    if (wsPathStr != 0) {
+        env->ReleaseStringUTFChars(wsPath, wsPathStr);
     }
 }
 
@@ -536,7 +540,7 @@ static JNINativeMethod ConnectionsManagerMethods[] = {
         {"native_cancelRequestsForGuid", "(II)V", (void *) cancelRequestsForGuid},
         {"native_bindRequestToGuid", "(III)V", (void *) bindRequestToGuid},
         {"native_applyDatacenterAddress", "(IILjava/lang/String;I)V", (void *) applyDatacenterAddress},
-        {"native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", (void *) setProxySettings},
+        {"native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", (void *) setProxySettings},
         {"native_getConnectionState", "(I)I", (void *) getConnectionState},
         {"native_setUserId", "(IJ)V", (void *) setUserId},
         {"native_init", "(IIIILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IJZZZII)V", (void *) init},

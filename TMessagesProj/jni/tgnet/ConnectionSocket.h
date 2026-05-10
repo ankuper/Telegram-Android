@@ -12,6 +12,7 @@
 #include <sys/epoll.h>
 #include <netinet/in.h>
 #include <string>
+#include <openssl/ssl.h>
 
 class NativeByteBuffer;
 class ConnectionsManager;
@@ -32,7 +33,7 @@ public:
     time_t getTimeout();
     bool isDisconnected();
     void dropConnection();
-    void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret);
+    void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, std::string wsPath);
     void onHostNameResolved(std::string host, std::string ip, bool ipv6);
 
 protected:
@@ -50,6 +51,8 @@ protected:
     std::string overrideProxyPassword = "";
     std::string overrideProxyAddress = "";
     std::string overrideProxySecret = "";
+    // WebSocket upgrade path for mtProxy3 overrides. Empty falls back to global setting.
+    std::string overrideProxyWsPath = "";
     uint16_t overrideProxyPort = 1080;
 
 private:
@@ -72,6 +75,7 @@ private:
 
     std::string currentSecret;
     std::string currentSecretDomain;
+    std::string currentWsPath;
 
     bool tlsHashMismatch = false;
     bool tlsBufferSized = true;
@@ -80,12 +84,22 @@ private:
     size_t bytesRead = 0;
     int8_t tlsState = 0;
 
+    SSL_CTX *sslCtx = nullptr;
+    SSL *ssl = nullptr;
+    int8_t wsState = 0;
+    bool wsWantsWrite = false;
+    std::string wsRxBuf;
+
     uint8_t proxyAuthState;
 
     int32_t checkSocketError(int32_t *error);
     void closeSocket(int32_t reason, int32_t error);
     void openConnectionInternal(bool ipv6);
     void adjustWriteOp();
+    void handleSslConnectResult(int ret);
+    void sendWsUpgradeRequest();
+    void parseAndDeliverWsFrames();
+    void sendWsPong(const uint8_t *payload, size_t payloadLen);
 
     friend class EventObject;
     friend class ConnectionsManager;

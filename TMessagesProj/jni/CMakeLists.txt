@@ -264,19 +264,19 @@ target_include_directories(rlottie PUBLIC
         rlottie/src/vector/stb)
 
 if (${ANDROID_ABI} STREQUAL "armeabi-v7a")
-    target_compile_options(rlottie PUBLIC
-            -fno-integrated-as)
     target_compile_definitions(rlottie PUBLIC
             USE_ARM_NEON)
     target_sources(rlottie PRIVATE
             rlottie/src/vector/pixman/pixman-arm-neon-asm.S)
+    set_source_files_properties(rlottie/src/vector/pixman/pixman-arm-neon-asm.S
+            PROPERTIES COMPILE_OPTIONS "-fno-integrated-as;-B/tmp/arm-android-as-shim")
 elseif(${ANDROID_ABI} STREQUAL "arm64-v8a")
-    target_compile_options(rlottie PUBLIC
-            -fno-integrated-as)
     target_compile_definitions(rlottie PUBLIC
             USE_ARM_NEON __ARM64_NEON__)
     target_sources(rlottie PRIVATE
             rlottie/src/vector/pixman/pixman-arma64-neon-asm.S)
+    set_source_files_properties(rlottie/src/vector/pixman/pixman-arma64-neon-asm.S
+            PROPERTIES COMPILE_OPTIONS "-fno-integrated-as;-B/tmp/aarch64-android-as-shim")
 endif()
 
 
@@ -388,7 +388,8 @@ add_library(${NATIVE_LIB} SHARED
 )
 
 target_compile_options(${NATIVE_LIB} PUBLIC
-        -ffast-math -Os -funroll-loops -ffast-math -fno-strict-aliasing -fno-math-errno)
+        -ffast-math -Os -funroll-loops -ffast-math -fno-strict-aliasing -fno-math-errno
+        -Wno-error=implicit-function-declaration)
 
 target_compile_definitions(${NATIVE_LIB} PUBLIC
         BSD=1 NULL=0 SOCKLEN_T=socklen_t ANDROID_NDK DISABLE_IMPORTGL AVOID_TABLES ANDROID_TILE_BASED_DECODE __STDC_CONSTANT_MACROS ANDROID_ARMV6_IDCT OPUS_BUILD FIXED_POINT USE_ALLOCA restrict= __EMX__ LOCALE_NOT_USED HAVE_LRINT HAVE_LRINTF)
@@ -641,6 +642,11 @@ target_include_directories(${NATIVE_LIB} PUBLIC
 
 target_link_options(${NATIVE_LIB} PRIVATE "-Wl,-z,max-page-size=16384")
 target_link_options(${NATIVE_LIB} PRIVATE "-Wl,-z,common-page-size=16384")
+# -Bsymbolic makes intra-library refs bind locally, turning would-be dynamic
+# relocations into R_AARCH64_RELATIVE in .data.rel.ro. Do NOT use -z,notext:
+# it sets DT_TEXTREL even when no text relocs actually exist, and Android 23+
+# rejects such libraries at dlopen time.
+target_link_options(${NATIVE_LIB} PRIVATE "-Wl,-Bsymbolic")
 target_link_libraries(${NATIVE_LIB}
         -Wl,--whole-archive rnnoise openh264 voipandroid -Wl,--no-whole-archive
         tgvoip

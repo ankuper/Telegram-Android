@@ -53,9 +53,11 @@ import java.util.Locale;
 public class SharedConfig {
     /**
      * V2: Ping and check time serialized
+     * V3: wsPath serialized (mtProxy3 WebSocket upgrade path)
      */
     private final static int PROXY_SCHEMA_V2 = 2;
-    private final static int PROXY_CURRENT_SCHEMA_VERSION = PROXY_SCHEMA_V2;
+    private final static int PROXY_SCHEMA_V3 = 3;
+    private final static int PROXY_CURRENT_SCHEMA_VERSION = PROXY_SCHEMA_V3;
 
     public final static int PASSCODE_TYPE_PIN = 0,
             PASSCODE_TYPE_PASSWORD = 1;
@@ -379,6 +381,9 @@ public class SharedConfig {
         public String username;
         public String password;
         public String secret;
+        // MTProxy3 (WebSocket) path used in the HTTP/1.1 Upgrade request. Empty for
+        // regular SOCKS5 / MTProto proxies. iOS parity: ProxyServerSettings.mtp3.wsPath.
+        public String wsPath;
 
         public long proxyCheckPingId;
         public long ping;
@@ -387,11 +392,16 @@ public class SharedConfig {
         public long availableCheckTime;
 
         public ProxyInfo(String address, int port, String username, String password, String secret) {
+            this(address, port, username, password, secret, "");
+        }
+
+        public ProxyInfo(String address, int port, String username, String password, String secret, String wsPath) {
             this.address = address;
             this.port = port;
             this.username = username;
             this.password = password;
             this.secret = secret;
+            this.wsPath = wsPath;
             if (this.address == null) {
                 this.address = "";
             }
@@ -403,6 +413,9 @@ public class SharedConfig {
             }
             if (this.secret == null) {
                 this.secret = "";
+            }
+            if (this.wsPath == null) {
+                this.wsPath = "";
             }
         }
 
@@ -427,6 +440,46 @@ public class SharedConfig {
     public static ArrayList<ProxyInfo> proxyList = new ArrayList<>();
     private static boolean proxyListLoaded;
     public static ProxyInfo currentProxy;
+
+    // Default mtProxy3 server (arctic-breeze) installed on fresh install — mirrors
+    // iOS ProxySettings.defaultSettings from commit c06ee44309 (v1.0.1).
+    public static final String DEFAULT_PROXY_ADDRESS = "arctic-breeze.my.id";
+    public static final int DEFAULT_PROXY_PORT = 443;
+    public static final String DEFAULT_PROXY_SECRET =
+            "fff5c64bc3e21530a2a8a60ea82214ed476172637469632d627265657a652e6d792e6964";
+    public static final String DEFAULT_PROXY_WS_PATH = "/v1/api/mtpr";
+
+    /**
+     * Seeds a default mtProxy3 server on fresh install when the user has never
+     * configured any proxy. Returns true if the default was just installed.
+     * Mirrors iOS `ProxySettings.defaultSettings` fallback in Network.swift.
+     */
+    public static boolean installDefaultProxyIfNeeded() {
+        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
+        if (preferences.getBoolean("proxy_default_installed", false)) {
+            return false;
+        }
+        String existingAddress = preferences.getString("proxy_ip", "");
+        String existingList = preferences.getString("proxy_list", null);
+        if (!TextUtils.isEmpty(existingAddress) || !TextUtils.isEmpty(existingList)) {
+            // User already configured a proxy; do not overwrite, but mark as seeded
+            // so we do not try again on subsequent launches.
+            preferences.edit().putBoolean("proxy_default_installed", true).apply();
+            return false;
+        }
+        SharedPreferences.Editor editor = preferences.edit();
+        editor.putString("proxy_ip", DEFAULT_PROXY_ADDRESS);
+        editor.putInt("proxy_port", DEFAULT_PROXY_PORT);
+        editor.putString("proxy_user", "");
+        editor.putString("proxy_pass", "");
+        editor.putString("proxy_secret", DEFAULT_PROXY_SECRET);
+        editor.putString("proxy_wspath", DEFAULT_PROXY_WS_PATH);
+        editor.putBoolean("proxy_enabled", true);
+        editor.putBoolean("proxy_enabled_calls", false);
+        editor.putBoolean("proxy_default_installed", true);
+        editor.apply();
+        return true;
+    }
 
     public static void saveConfig() {
         synchronized (sync) {
@@ -1429,8 +1482,12 @@ public class SharedConfig {
         if (proxyListLoaded) {
             return;
         }
+        // Ensure the arctic-breeze mtProxy3 default is seeded before reading, so
+        // fresh-install users get a working proxy. (iOS parity: c06ee44309 v1.0.1)
+        installDefaultProxyIfNeeded();
         SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         String proxyAddress = preferences.getString("proxy_ip", "");
+        String proxyWsPath = preferences.getString("proxy_wspath", "");
         String proxyUsername = preferences.getString("proxy_user", "");
         String proxyPassword = preferences.getString("proxy_pass", "");
         String proxySecret = preferences.getString("proxy_secret", "");
@@ -1447,7 +1504,7 @@ public class SharedConfig {
             if (count == -1) { // V2 or newer
                 int version = data.readByte(false);
 
-                if (version == PROXY_SCHEMA_V2) {
+                if (version == PROXY_SCHEMA_V2 || version == PROXY_SCHEMA_V3) {
                     count = data.readInt32(false);
 
                     for (int i = 0; i < count; i++) {
@@ -1460,6 +1517,9 @@ public class SharedConfig {
 
                         info.ping = data.readInt64(false);
                         info.availableCheckTime = data.readInt64(false);
+                        if (version >= PROXY_SCHEMA_V3) {
+                            info.wsPath = data.readString(false);
+                        }
 
                         proxyList.add(0, info);
                         if (currentProxy == null && !TextUtils.isEmpty(proxyAddress)) {
@@ -1490,7 +1550,7 @@ public class SharedConfig {
             data.cleanup();
         }
         if (currentProxy == null && !TextUtils.isEmpty(proxyAddress)) {
-            ProxyInfo info = currentProxy = new ProxyInfo(proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
+            ProxyInfo info = currentProxy = new ProxyInfo(proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, proxyWsPath);
             proxyList.add(0, info);
         }
     }
@@ -1523,6 +1583,7 @@ public class SharedConfig {
 
             serializedData.writeInt64(info.ping);
             serializedData.writeInt64(info.availableCheckTime);
+            serializedData.writeString(info.wsPath != null ? info.wsPath : "");
         }
         SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         preferences.edit().putString("proxy_list", Base64.encodeToString(serializedData.toByteArray(), Base64.NO_WRAP)).apply();
@@ -1534,7 +1595,9 @@ public class SharedConfig {
         int count = proxyList.size();
         for (int a = 0; a < count; a++) {
             ProxyInfo info = proxyList.get(a);
-            if (proxyInfo.address.equals(info.address) && proxyInfo.port == info.port && proxyInfo.username.equals(info.username) && proxyInfo.password.equals(info.password) && proxyInfo.secret.equals(info.secret)) {
+            String aWsPath = info.wsPath != null ? info.wsPath : "";
+            String bWsPath = proxyInfo.wsPath != null ? proxyInfo.wsPath : "";
+            if (proxyInfo.address.equals(info.address) && proxyInfo.port == info.port && proxyInfo.username.equals(info.username) && proxyInfo.password.equals(info.password) && proxyInfo.secret.equals(info.secret) && aWsPath.equals(bWsPath)) {
                 return info;
             }
         }
@@ -1557,6 +1620,7 @@ public class SharedConfig {
             editor.putString("proxy_pass", "");
             editor.putString("proxy_user", "");
             editor.putString("proxy_secret", "");
+            editor.putString("proxy_wspath", "");
             editor.putInt("proxy_port", 1080);
             editor.putBoolean("proxy_enabled", false);
             editor.putBoolean("proxy_enabled_calls", false);

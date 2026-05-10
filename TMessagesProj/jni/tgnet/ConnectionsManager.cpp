@@ -3705,16 +3705,17 @@ void ConnectionsManager::init(uint32_t version, int32_t layer, int32_t apiId, st
     }
 }
 
-void ConnectionsManager::setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret) {
-    scheduleTask([&, address, port, username, password, secret] {
+void ConnectionsManager::setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, std::string wsPath) {
+    scheduleTask([&, address, port, username, password, secret, wsPath] {
         std::string newSecret = decodeSecret(secret);
-        bool secretChanged = proxySecret != newSecret;
+        bool secretChanged = proxySecret != newSecret || proxyWsPath != wsPath;
         bool reconnect = proxyAddress != address || proxyPort != port || username != proxyUser || proxyPassword != password || secretChanged;
         proxyAddress = address;
         proxyPort = port;
         proxyUser = username;
         proxyPassword = password;
         proxySecret = std::move(newSecret);
+        proxyWsPath = wsPath;
         if (!proxyAddress.empty() && connectionState == ConnectionStateConnecting) {
             connectionState = ConnectionStateConnectingViaProxy;
             if (delegate != nullptr) {
@@ -3911,7 +3912,7 @@ void ConnectionsManager::checkProxyInternal(ProxyCheckInfo *proxyCheckInfo) {
         Datacenter *datacenter = getDatacenterWithId(DEFAULT_DATACENTER_ID);
         Connection *connection = datacenter->getProxyConnection((uint8_t) freeConnectionNum, true, false);
         if (connection != nullptr) {
-            connection->setOverrideProxy(proxyCheckInfo->address, proxyCheckInfo->port, proxyCheckInfo->username, proxyCheckInfo->password, proxyCheckInfo->secret);
+            connection->setOverrideProxy(proxyCheckInfo->address, proxyCheckInfo->port, proxyCheckInfo->username, proxyCheckInfo->password, proxyCheckInfo->secret, "");
             connection->suspendConnection();
             proxyCheckInfo->connectionNum = freeConnectionNum;
             auto request = new TL_ping();

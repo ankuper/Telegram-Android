@@ -112,6 +112,28 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     private List<SharedConfig.ProxyInfo> proxyList = new ArrayList<>();
     private boolean wasCheckedAllList;
 
+    private static boolean isMtProxy3(SharedConfig.ProxyInfo proxyInfo) {
+        if (TextUtils.isEmpty(proxyInfo.secret)) return false;
+        String secret = proxyInfo.secret;
+        boolean allHex = true;
+        for (int i = 0; i < secret.length(); i++) {
+            char c = secret.charAt(i);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                allHex = false;
+                break;
+            }
+        }
+        if (allHex && secret.length() >= 36) {
+            return secret.substring(0, 2).equalsIgnoreCase("ff");
+        }
+        try {
+            byte[] decoded = android.util.Base64.decode(secret, android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING);
+            return decoded.length >= 18 && (decoded[0] & 0xFF) == 0xFF;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public class TextDetailProxyCell extends FrameLayout {
 
         private TextView textView;
@@ -173,7 +195,8 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         }
 
         public void setProxy(SharedConfig.ProxyInfo proxyInfo) {
-            textView.setText(proxyInfo.address + ":" + proxyInfo.port);
+            String prefix = isMtProxy3(proxyInfo) ? "mtProxy3 · " : "";
+            textView.setText(prefix + proxyInfo.address + ":" + proxyInfo.port);
             currentInfo = proxyInfo;
         }
 
@@ -404,6 +427,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                             editor.putString("proxy_user", SharedConfig.currentProxy.username);
                             editor.putInt("proxy_port", SharedConfig.currentProxy.port);
                             editor.putString("proxy_secret", SharedConfig.currentProxy.secret);
+                            editor.putString("proxy_wspath", SharedConfig.currentProxy.wsPath != null ? SharedConfig.currentProxy.wsPath : "");
                             editor.commit();
                         }
                     } else {
@@ -431,7 +455,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 editor.putBoolean("proxy_enabled", useProxySettings);
                 editor.commit();
 
-                ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret);
+                ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret, SharedConfig.currentProxy.wsPath != null ? SharedConfig.currentProxy.wsPath : "");
                 NotificationCenter.getGlobalInstance().removeObserver(ProxyListActivity.this, NotificationCenter.proxySettingsChanged);
                 NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
                 NotificationCenter.getGlobalInstance().addObserver(ProxyListActivity.this, NotificationCenter.proxySettingsChanged);
@@ -470,6 +494,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 editor.putString("proxy_user", info.username);
                 editor.putInt("proxy_port", info.port);
                 editor.putString("proxy_secret", info.secret);
+                editor.putString("proxy_wspath", info.wsPath != null ? info.wsPath : "");
                 editor.putBoolean("proxy_enabled", useProxySettings);
                 if (!info.secret.isEmpty()) {
                     useProxyForCalls = false;
@@ -491,7 +516,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     TextCheckCell textCheckCell = (TextCheckCell) holder.itemView;
                     textCheckCell.setChecked(true);
                 }
-                ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret);
+                ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret, SharedConfig.currentProxy.wsPath != null ? SharedConfig.currentProxy.wsPath : "");
             } else if (position == proxyAddRow) {
                 presentFragment(new ProxySettingsActivity());
             } else if (position == deleteAllRow) {

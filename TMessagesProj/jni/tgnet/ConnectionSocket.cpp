@@ -17,8 +17,12 @@
 #include <netdb.h>
 #include <openssl/rand.h>
 #include <openssl/hmac.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
 #include <algorithm>
 #include <utility>
+#include <vector>
 #include <openssl/bn.h>
 #include "ByteStream.h"
 #include "ConnectionSocket.h"
@@ -487,11 +491,13 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
 
     std::string *proxyAddress = &overrideProxyAddress;
     std::string *proxySecret = &overrideProxySecret;
+    std::string *proxyWsPath = &overrideProxyWsPath;
     uint16_t proxyPort = overrideProxyPort;
     if (proxyAddress->empty()) {
         proxyAddress = &ConnectionsManager::getInstance(instanceNum).proxyAddress;
         proxyPort = ConnectionsManager::getInstance(instanceNum).proxyPort;
         proxySecret = &ConnectionsManager::getInstance(instanceNum).proxySecret;
+        proxyWsPath = &ConnectionsManager::getInstance(instanceNum).proxyWsPath;
     }
 
     if (!proxyAddress->empty()) {
@@ -510,6 +516,13 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             currentSecret = proxySecret->substr(1, 16);
             currentSecretDomain = proxySecret->substr(17);
             tempBuffLength = 65 * 1024;
+        } else if (proxySecret->size() >= 18 && (uint8_t)(*proxySecret)[0] == 0xff) {
+            proxyAuthState = 20;
+            currentSecret = proxySecret->substr(1, 16);
+            currentSecretDomain = proxySecret->substr(17);
+            // Use configured wsPath; fall back to the arctic-breeze default when empty.
+            currentWsPath = !proxyWsPath->empty() ? *proxyWsPath : std::string("/v1/api/mtpr");
+            tempBuffLength = 0;
         } else {
             proxyAuthState = 0;
             tempBuffLength = 0;
@@ -595,6 +608,11 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             currentSecret = secret.substr(1, 16);
             currentSecretDomain = secret.substr(17);
             tempBuffLength = 65 * 1024;
+        } else if (secret.size() >= 18 && (uint8_t)secret[0] == 0xff) {
+            proxyAuthState = 20;
+            currentSecret = secret.substr(1, 16);
+            currentSecretDomain = secret.substr(17);
+            tempBuffLength = 0;
         } else {
             proxyAuthState = 0;
             tempBuffLength = 0;
@@ -684,6 +702,17 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
         tlsBuffer->reuse();
         tlsBuffer = nullptr;
     }
+    if (ssl != nullptr) {
+        SSL_free(ssl);
+        ssl = nullptr;
+    }
+    if (sslCtx != nullptr) {
+        SSL_CTX_free(sslCtx);
+        sslCtx = nullptr;
+    }
+    wsState = 0;
+    wsWantsWrite = false;
+    wsRxBuf.clear();
     onDisconnected(reason, error);
 }
 
@@ -694,21 +723,78 @@ void ConnectionSocket::onEvent(uint32_t events) {
             closeSocket(1, error);
             return;
         } else {
+            // Type3 (0xff): SSL handshake needs more data from the server
+            if (proxyAuthState == 21) {
+                int ret = SSL_connect(ssl);
+                handleSslConnectResult(ret);
+                return;
+            }
+            // Type3 (0xff): reading HTTP 101 WebSocket upgrade response
+            if (proxyAuthState == 23) {
+                uint8_t httpBuf[4096];
+                int rc = SSL_read(ssl, httpBuf, sizeof(httpBuf));
+                if (rc <= 0) {
+                    int sslErr = SSL_get_error(ssl, rc);
+                    if (sslErr != SSL_ERROR_WANT_READ && sslErr != SSL_ERROR_WANT_WRITE) {
+                        if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 SSL_read HTTP response failed %d", this, sslErr);
+                        closeSocket(1, -1);
+                    }
+                    return;
+                }
+                wsRxBuf.append((char *) httpBuf, rc);
+                size_t pos = wsRxBuf.find("\r\n\r\n");
+                if (pos == std::string::npos) {
+                    return; // Need more data
+                }
+                if (wsRxBuf.find("101") == std::string::npos) {
+                    DEBUG_E("connection(%p) Type3 WS upgrade failed (no 101): %.200s", this, wsRxBuf.c_str());
+                    closeSocket(1, -1);
+                    return;
+                }
+                DEBUG_D("connection(%p) Type3 WebSocket upgrade succeeded, tunnel active", this);
+                std::string leftover = wsRxBuf.substr(pos + 4);
+                wsRxBuf = std::move(leftover);
+                proxyAuthState = 0;
+                wsState = 1;
+                lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                onConnected();
+                onConnectedSent = true;
+                adjustWriteOp();
+                if (!wsRxBuf.empty()) {
+                    parseAndDeliverWsFrames();
+                }
+                return;
+            }
             ssize_t readCount;
             NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
             while (true) {
                 buffer->rewind();
-                readCount = recv(socketFd, buffer->bytes(), READ_BUFFER_SIZE, 0);
-                int err = errno;
-//                if (LOGS_ENABLED) DEBUG_D("connection(%p) recv resulted with %d, errno=%d", this, readCount, err);
-                if (readCount < 0) {
-                    if (err == EAGAIN) {
+                if (ssl != nullptr && wsState != 0) {
+                    readCount = SSL_read(ssl, buffer->bytes(), READ_BUFFER_SIZE);
+                    if (readCount <= 0) {
+                        int sslErr = SSL_get_error(ssl, (int) readCount);
+                        if (sslErr == SSL_ERROR_WANT_READ || sslErr == SSL_ERROR_WANT_WRITE) {
+                            break;
+                        }
+                        closeSocket(1, -1);
+                        return;
+                    }
+                } else {
+                    readCount = recv(socketFd, buffer->bytes(), READ_BUFFER_SIZE, 0);
+                    int err = errno;
+                    if (readCount < 0) {
+                        if (err == EAGAIN) {
+                            break;
+                        }
+                        closeSocket(1, -1);
+                        if (LOGS_ENABLED) DEBUG_E("connection(%p) recv failed", this);
+                        return;
+                    }
+                    if (readCount == 0) {
                         break;
                     }
-                    closeSocket(1, -1);
-                    if (LOGS_ENABLED) DEBUG_E("connection(%p) recv failed", this);
-                    return;
                 }
+//                if (LOGS_ENABLED) DEBUG_D("connection(%p) recv resulted with %d", this, readCount);
                 if (readCount > 0) {
                     buffer->limit((uint32_t) readCount);
                     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
@@ -830,7 +916,11 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
                             ConnectionsManager::getInstance(instanceNum).delegate->onBytesReceived((int32_t) readCount, currentNetworkType, instanceNum);
                         }
-                        if (tlsState != 0) {
+                        if (wsState != 0) {
+                            wsRxBuf.append((char *) buffer->bytes(), (size_t) readCount);
+                            parseAndDeliverWsFrames();
+                            if (ssl == nullptr) return;
+                        } else if (tlsState != 0) {
                             while (buffer->hasRemaining()) {
                                 size_t newBytesRead = buffer->remaining();
                                 if (tlsBuffer != nullptr) {
@@ -939,6 +1029,36 @@ void ConnectionSocket::onEvent(uint32_t events) {
                             return;
                         }
                         adjustWriteOp();
+                    } else if (proxyAuthState == 20) {
+                        // Type3: TCP connect complete — initialize SSL and begin handshake
+                        lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                        DEBUG_D("connection(%p) Type3: TCP connected, starting TLS to %s wsPath=%s", this, currentSecretDomain.c_str(), currentWsPath.c_str());
+                        sslCtx = SSL_CTX_new(TLS_client_method());
+                        if (sslCtx == nullptr) {
+                            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 SSL_CTX_new failed", this);
+                            closeSocket(1, -1);
+                            return;
+                        }
+                        // TLS is camouflage only; real security comes from MTProto AES-256-CTR.
+                        // Skip cert verification — Android NDK OpenSSL has no system CA store.
+                        SSL_CTX_set_verify(sslCtx, SSL_VERIFY_NONE, nullptr);
+                        ssl = SSL_new(sslCtx);
+                        if (ssl == nullptr) {
+                            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 SSL_new failed", this);
+                            closeSocket(1, -1);
+                            return;
+                        }
+                        SSL_set_fd(ssl, socketFd);
+                        SSL_set_tlsext_host_name(ssl, currentSecretDomain.c_str());
+                        int ret = SSL_connect(ssl);
+                        handleSslConnectResult(ret);
+                    } else if (proxyAuthState == 21 && wsWantsWrite) {
+                        // Type3: SSL handshake needs to write more data
+                        int ret = SSL_connect(ssl);
+                        handleSslConnectResult(ret);
+                    } else if (proxyAuthState == 22) {
+                        // Type3: SSL done — send HTTP WebSocket upgrade
+                        sendWsUpgradeRequest();
                     }
                 } else {
                     if (proxyAuthState == 1) {
@@ -1010,7 +1130,59 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 uint32_t remaining = buffer->remaining();
                 if (remaining) {
                     ssize_t sentLength;
-                    if (tlsState != 0) {
+                    if (wsState != 0) {
+                        // Type3: wrap in WebSocket frame (RFC 6455), send via SSL
+                        if (remaining > 65000) {
+                            remaining = 65000;
+                        }
+                        uint8_t wsHeader[10];
+                        int wsHeaderLen;
+                        wsHeader[0] = 0x82; // FIN=1, OPCODE=2 (Binary)
+                        if (remaining < 126) {
+                            wsHeader[1] = 0x80 | (uint8_t) remaining; // MASK=1
+                            wsHeaderLen = 2;
+                        } else if (remaining <= 0xFFFF) {
+                            wsHeader[1] = 0x80 | 126;
+                            wsHeader[2] = (uint8_t) ((remaining >> 8) & 0xFF);
+                            wsHeader[3] = (uint8_t) (remaining & 0xFF);
+                            wsHeaderLen = 4;
+                        } else {
+                            wsHeader[1] = 0x80 | 127;
+                            for (int i = 0; i < 8; i++) wsHeader[2 + i] = (uint8_t) ((remaining >> (56 - 8 * i)) & 0xFF);
+                            wsHeaderLen = 10;
+                        }
+                        uint8_t maskKey[4];
+                        RAND_bytes(maskKey, 4);
+
+                        uint32_t frameSize = (uint32_t) wsHeaderLen + 4 + remaining;
+                        uint8_t *frame = new uint8_t[frameSize];
+                        memcpy(frame, wsHeader, wsHeaderLen);
+                        memcpy(frame + wsHeaderLen, maskKey, 4);
+                        uint8_t *payloadSrc = buffer->bytes();
+                        uint8_t *payloadDst = frame + wsHeaderLen + 4;
+                        for (uint32_t i = 0; i < remaining; i++) {
+                            payloadDst[i] = payloadSrc[i] ^ maskKey[i % 4];
+                        }
+
+                        sentLength = SSL_write(ssl, frame, (int) frameSize);
+                        delete[] frame;
+
+                        if (sentLength <= 0) {
+                            int sslErr = SSL_get_error(ssl, (int) sentLength);
+                            if (sslErr == SSL_ERROR_WANT_WRITE) {
+                                adjustWriteOp();
+                                return;
+                            }
+                            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 SSL_write failed %d", this, sslErr);
+                            closeSocket(1, -1);
+                            return;
+                        }
+                        if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
+                            ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent((int32_t) sentLength, currentNetworkType, instanceNum);
+                        }
+                        outgoingByteStream->discard(remaining);
+                        adjustWriteOp();
+                    } else if (tlsState != 0) {
                         if (remaining > 2878) {
                             remaining = 2878;
                         }
@@ -1092,7 +1264,7 @@ void ConnectionSocket::adjustWriteOp() {
         return;
     }
     eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
-    if (proxyAuthState == 0 && (outgoingByteStream->hasData() || !onConnectedSent) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10) {
+    if (proxyAuthState == 0 && (outgoingByteStream->hasData() || !onConnectedSent) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10 || proxyAuthState == 20 || (proxyAuthState == 21 && wsWantsWrite) || proxyAuthState == 22) {
         eventMask.events |= EPOLLOUT;
     }
     eventMask.data.ptr = eventObject;
@@ -1100,6 +1272,185 @@ void ConnectionSocket::adjustWriteOp() {
         if (LOGS_ENABLED) DEBUG_E("connection(%p) epoll_ctl, modify socket failed", this);
         closeSocket(1, -1);
     }
+}
+
+void ConnectionSocket::handleSslConnectResult(int ret) {
+    if (ret == 1) {
+        // Handshake complete — send HTTP WebSocket upgrade
+        proxyAuthState = 22;
+        wsWantsWrite = false;
+        sendWsUpgradeRequest();
+    } else {
+        int err = SSL_get_error(ssl, ret);
+        if (err == SSL_ERROR_WANT_READ) {
+            proxyAuthState = 21;
+            wsWantsWrite = false;
+            adjustWriteOp();
+        } else if (err == SSL_ERROR_WANT_WRITE) {
+            proxyAuthState = 21;
+            wsWantsWrite = true;
+            adjustWriteOp();
+        } else {
+            DEBUG_E("connection(%p) Type3 SSL_connect error %d (OpenSSL err %lu)", this, err, ERR_peek_last_error());
+            closeSocket(1, -1);
+        }
+    }
+}
+
+void ConnectionSocket::sendWsUpgradeRequest() {
+    // Generate 16 random bytes and base64-encode them for Sec-WebSocket-Key
+    uint8_t nonceBytes[16];
+    RAND_bytes(nonceBytes, 16);
+    uint8_t b64Out[25]; // ceil(16/3)*4 + 1
+    int b64Len = EVP_EncodeBlock(b64Out, nonceBytes, 16);
+    std::string wsKey(reinterpret_cast<char *>(b64Out), (size_t) b64Len);
+
+    std::string path = currentWsPath.empty() ? std::string("/v1/api/mtpr") : currentWsPath;
+    std::string upgradeReq =
+        "GET " + path + " HTTP/1.1\r\n"
+        "Host: " + currentSecretDomain + "\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: " + wsKey + "\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n";
+
+    DEBUG_D("connection(%p) Type3: TLS secured, sending WS upgrade GET %s Host:%s", this, path.c_str(), currentSecretDomain.c_str());
+
+    int written = SSL_write(ssl, upgradeReq.data(), (int) upgradeReq.size());
+    if (written <= 0) {
+        int err = SSL_get_error(ssl, written);
+        if (err == SSL_ERROR_WANT_WRITE) {
+            // Stay in state 22, retry on next EPOLLOUT
+            adjustWriteOp();
+            return;
+        }
+        if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 SSL_write HTTP upgrade failed %d", this, err);
+        closeSocket(1, -1);
+        return;
+    }
+    proxyAuthState = 23;
+    wsRxBuf.clear();
+    adjustWriteOp();
+}
+
+void ConnectionSocket::parseAndDeliverWsFrames() {
+    while (wsRxBuf.size() >= 2) {
+        uint8_t byte0 = (uint8_t) wsRxBuf[0];
+        uint8_t byte1 = (uint8_t) wsRxBuf[1];
+        uint8_t opcode = byte0 & 0x0F;
+        uint8_t payloadLenField = byte1 & 0x7F;
+        bool isMasked = (byte1 & 0x80) != 0;
+        bool isControlFrame = (opcode & 0x8) != 0;
+
+        size_t headerLen = 2;
+        uint64_t payloadLen;
+
+        if (payloadLenField < 126) {
+            payloadLen = payloadLenField;
+        } else if (payloadLenField == 126) {
+            if (wsRxBuf.size() < 4) break;
+            payloadLen = ((uint8_t) wsRxBuf[2] << 8) | (uint8_t) wsRxBuf[3];
+            headerLen = 4;
+        } else {
+            if (wsRxBuf.size() < 10) break;
+            payloadLen = 0;
+            for (int i = 0; i < 8; i++) {
+                payloadLen = (payloadLen << 8) | (uint8_t) wsRxBuf[2 + i];
+            }
+            headerLen = 10;
+        }
+
+        if (isMasked) headerLen += 4;
+        if (payloadLen > (uint64_t) READ_BUFFER_SIZE) {
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 WS frame too large %" PRIu64, this, payloadLen);
+            closeSocket(1, -1);
+            return;
+        }
+        if (wsRxBuf.size() < headerLen + (size_t) payloadLen) break;
+
+        // Handle WS control frames (RFC 6455 §5.5) — iOS parity: 8c144d07b0.
+        // CLOSE=0x8 tears down the connection; PING=0x9 is answered with a masked PONG;
+        // PONG=0xA and unknown control opcodes are discarded without disturbing the
+        // MTProto data stream.
+        if (isControlFrame) {
+            if (opcode == 0x8) {
+                if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 WS CLOSE received", this);
+                wsRxBuf.erase(0, headerLen + (size_t) payloadLen);
+                closeSocket(0, 0);
+                return;
+            }
+            if (opcode == 0x9) {
+                // PING — unmask payload (if masked) and echo back as a masked PONG.
+                std::vector<uint8_t> pingPayload((size_t) payloadLen);
+                if (payloadLen > 0) {
+                    memcpy(pingPayload.data(), wsRxBuf.data() + headerLen, (size_t) payloadLen);
+                    if (isMasked) {
+                        const uint8_t *maskKey = (const uint8_t *) wsRxBuf.data() + headerLen - 4;
+                        for (uint64_t i = 0; i < payloadLen; i++) {
+                            pingPayload[i] ^= maskKey[i % 4];
+                        }
+                    }
+                }
+                sendWsPong(pingPayload.data(), (size_t) pingPayload.size());
+            }
+            // PONG (0xA) or unknown control: just discard
+            wsRxBuf.erase(0, headerLen + (size_t) payloadLen);
+            continue;
+        }
+
+        if (payloadLen > 0) {
+            NativeByteBuffer *frameBuffer = BuffersStorage::getInstance().getFreeBuffer((uint32_t) payloadLen);
+            memcpy(frameBuffer->bytes(), wsRxBuf.data() + headerLen, (size_t) payloadLen);
+            if (isMasked) {
+                const uint8_t *maskKey = (const uint8_t *) wsRxBuf.data() + headerLen - 4;
+                uint8_t *bytes = frameBuffer->bytes();
+                for (uint64_t i = 0; i < payloadLen; i++) {
+                    bytes[i] ^= maskKey[i % 4];
+                }
+            }
+            wsRxBuf.erase(0, headerLen + (size_t) payloadLen);
+            frameBuffer->limit((uint32_t) payloadLen);
+            onReceivedData(frameBuffer);
+            if (ssl == nullptr) {
+                frameBuffer->reuse();
+                return;
+            }
+            frameBuffer->reuse();
+        } else {
+            wsRxBuf.erase(0, headerLen);
+        }
+    }
+}
+
+void ConnectionSocket::sendWsPong(const uint8_t *payload, size_t payloadLen) {
+    if (ssl == nullptr) return;
+    uint8_t header[10];
+    size_t headerLen;
+    header[0] = 0x8A; // FIN=1, OPCODE=0xA (Pong)
+    if (payloadLen < 126) {
+        header[1] = 0x80 | (uint8_t) payloadLen; // MASK=1
+        headerLen = 2;
+    } else if (payloadLen <= 0xFFFF) {
+        header[1] = 0x80 | 126;
+        header[2] = (uint8_t) ((payloadLen >> 8) & 0xFF);
+        header[3] = (uint8_t) (payloadLen & 0xFF);
+        headerLen = 4;
+    } else {
+        header[1] = 0x80 | 127;
+        for (int i = 0; i < 8; i++) header[2 + i] = (uint8_t) ((payloadLen >> (56 - 8 * i)) & 0xFF);
+        headerLen = 10;
+    }
+    uint8_t maskKey[4];
+    RAND_bytes(maskKey, 4);
+    size_t frameSize = headerLen + 4 + payloadLen;
+    std::vector<uint8_t> frame(frameSize);
+    memcpy(frame.data(), header, headerLen);
+    memcpy(frame.data() + headerLen, maskKey, 4);
+    for (size_t i = 0; i < payloadLen; i++) {
+        frame[headerLen + 4 + i] = payload[i] ^ maskKey[i % 4];
+    }
+    SSL_write(ssl, frame.data(), (int) frameSize);
 }
 
 void ConnectionSocket::setTimeout(time_t time) {
@@ -1141,12 +1492,13 @@ void ConnectionSocket::dropConnection() {
     closeSocket(0, 0);
 }
 
-void ConnectionSocket::setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret) {
+void ConnectionSocket::setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, std::string wsPath) {
     overrideProxyAddress = address;
     overrideProxyPort = port;
     overrideProxyUser = username;
     overrideProxyPassword = password;
     overrideProxySecret = secret;
+    overrideProxyWsPath = wsPath;
 }
 
 void ConnectionSocket::onHostNameResolved(std::string host, std::string ip, bool ipv6) {

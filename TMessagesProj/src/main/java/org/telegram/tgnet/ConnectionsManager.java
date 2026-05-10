@@ -608,15 +608,19 @@ public class ConnectionsManager extends BaseController {
     }
 
     public void init(int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection) {
+        // Seed the arctic-breeze mtProxy3 default on fresh install so the app
+        // boots with a working proxy. (iOS parity: c06ee44309 v1.0.1)
+        SharedConfig.installDefaultProxyIfNeeded();
         SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         String proxyAddress = preferences.getString("proxy_ip", "");
         String proxyUsername = preferences.getString("proxy_user", "");
         String proxyPassword = preferences.getString("proxy_pass", "");
         String proxySecret = preferences.getString("proxy_secret", "");
+        String proxyWsPath = preferences.getString("proxy_wspath", "");
         int proxyPort = preferences.getInt("proxy_port", 1080);
 
         if (preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress)) {
-            native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
+            native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, proxyWsPath);
         }
         String installer = "";
         try {
@@ -929,6 +933,10 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void setProxySettings(boolean enabled, String address, int port, String username, String password, String secret) {
+        setProxySettings(enabled, address, port, username, password, secret, "");
+    }
+
+    public static void setProxySettings(boolean enabled, String address, int port, String username, String password, String secret, String wsPath) {
         if (address == null) {
             address = "";
         }
@@ -941,12 +949,15 @@ public class ConnectionsManager extends BaseController {
         if (secret == null) {
             secret = "";
         }
+        if (wsPath == null) {
+            wsPath = "";
+        }
 
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             if (enabled && !TextUtils.isEmpty(address)) {
-                native_setProxySettings(a, address, port, username, password, secret);
+                native_setProxySettings(a, address, port, username, password, secret, wsPath);
             } else {
-                native_setProxySettings(a, "", 1080, "", "", "");
+                native_setProxySettings(a, "", 1080, "", "", "", "");
             }
             AccountInstance accountInstance = AccountInstance.getInstance(a);
             if (accountInstance.getUserConfig().isClientActivated()) {
@@ -978,7 +989,7 @@ public class ConnectionsManager extends BaseController {
     public static native int native_getConnectionState(int currentAccount);
     public static native void native_setUserId(int currentAccount, long id);
     public static native void native_init(int currentAccount, int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, String installer, String packageId, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection, boolean hasNetwork, int networkType, int performanceClass);
-    public static native void native_setProxySettings(int currentAccount, String address, int port, String username, String password, String secret);
+    public static native void native_setProxySettings(int currentAccount, String address, int port, String username, String password, String secret, String wsPath);
     public static native void native_setLangCode(int currentAccount, String langCode);
     public static native void native_setRegId(int currentAccount, String regId);
     public static native void native_setSystemLangCode(int currentAccount, String langCode);

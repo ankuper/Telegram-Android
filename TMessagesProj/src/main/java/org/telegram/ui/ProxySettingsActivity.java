@@ -77,12 +77,18 @@ public class ProxySettingsActivity extends BaseFragment {
 
     private final static int TYPE_SOCKS5 = 0;
     private final static int TYPE_MTPROTO = 1;
+    // MTProxy3: MTProto tunneled over HTTPS + WebSocket (RFC 6455). The secret
+    // starts with 0xff, is followed by a 16-byte key and a UTF-8 domain. Port is
+    // typically 443. See iOS parity: ProxyServerSettings.mtp3(secret, wsPath).
+    private final static int TYPE_MTPROTO3 = 2;
 
     private final static int FIELD_IP = 0;
     private final static int FIELD_PORT = 1;
     private final static int FIELD_USER = 2;
     private final static int FIELD_PASSWORD = 3;
     private final static int FIELD_SECRET = 4;
+    // WebSocket upgrade path; only visible when TYPE_MTPROTO3 is selected.
+    private final static int FIELD_WSPATH = 5;
 
     private EditTextBoldCursor[] inputFields;
     private ScrollView scrollView;
@@ -94,7 +100,7 @@ public class ProxySettingsActivity extends BaseFragment {
     private TextSettingsCell shareCell;
     private TextSettingsCell pasteCell;
     private ActionBarMenuItem doneItem;
-    private RadioCell[] typeCell = new RadioCell[2];
+    private RadioCell[] typeCell = new RadioCell[3];
     private int currentType = -1;
 
     private int pasteType = -1;
@@ -172,6 +178,32 @@ public class ProxySettingsActivity extends BaseFragment {
         addingNewProxy = true;
     }
 
+    /**
+     * Matches a Type3 (mtProxy3) secret: a hex or URL-safe base64 string whose
+     * first byte is 0xff. Kept in sync with ProxyListActivity.isMtProxy3 so both
+     * places agree on the type label.
+     */
+    private static boolean isMtProxy3Secret(String secret) {
+        if (TextUtils.isEmpty(secret)) return false;
+        boolean allHex = true;
+        for (int i = 0; i < secret.length(); i++) {
+            char c = secret.charAt(i);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                allHex = false;
+                break;
+            }
+        }
+        if (allHex && secret.length() >= 36) {
+            return secret.substring(0, 2).equalsIgnoreCase("ff");
+        }
+        try {
+            byte[] decoded = android.util.Base64.decode(secret, android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING);
+            return decoded.length >= 18 && (decoded[0] & 0xFF) == 0xFF;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public ProxySettingsActivity(SharedConfig.ProxyInfo proxyInfo) {
         super();
         currentProxyInfo = proxyInfo;
@@ -213,14 +245,24 @@ public class ProxySettingsActivity extends BaseFragment {
                     }
                     currentProxyInfo.address = inputFields[FIELD_IP].getText().toString();
                     currentProxyInfo.port = Utilities.parseInt(inputFields[FIELD_PORT].getText().toString());
-                    if (currentType == 0) {
+                    if (currentType == TYPE_SOCKS5) {
                         currentProxyInfo.secret = "";
                         currentProxyInfo.username = inputFields[FIELD_USER].getText().toString();
                         currentProxyInfo.password = inputFields[FIELD_PASSWORD].getText().toString();
+                        currentProxyInfo.wsPath = "";
                     } else {
+                        // Both TYPE_MTPROTO and TYPE_MTPROTO3 persist the secret as-is;
+                        // the 0xff prefix in the secret marks Type3 and triggers the
+                        // WebSocket tunnel at the native connection layer. TYPE_MTPROTO3
+                        // also captures a WebSocket Path used in the HTTP/1.1 Upgrade.
                         currentProxyInfo.secret = inputFields[FIELD_SECRET].getText().toString();
                         currentProxyInfo.username = "";
                         currentProxyInfo.password = "";
+                        if (currentType == TYPE_MTPROTO3) {
+                            currentProxyInfo.wsPath = inputFields[FIELD_WSPATH].getText().toString();
+                        } else {
+                            currentProxyInfo.wsPath = "";
+                        }
                     }
 
                     SharedPreferences preferences = MessagesController.getGlobalMainSettings();
@@ -241,7 +283,8 @@ public class ProxySettingsActivity extends BaseFragment {
                         editor.putString("proxy_user", currentProxyInfo.username);
                         editor.putInt("proxy_port", currentProxyInfo.port);
                         editor.putString("proxy_secret", currentProxyInfo.secret);
-                        ConnectionsManager.setProxySettings(enabled, currentProxyInfo.address, currentProxyInfo.port, currentProxyInfo.username, currentProxyInfo.password, currentProxyInfo.secret);
+                        editor.putString("proxy_wspath", currentProxyInfo.wsPath != null ? currentProxyInfo.wsPath : "");
+                        ConnectionsManager.setProxySettings(enabled, currentProxyInfo.address, currentProxyInfo.port, currentProxyInfo.username, currentProxyInfo.password, currentProxyInfo.secret, currentProxyInfo.wsPath != null ? currentProxyInfo.wsPath : "");
                     }
                     editor.commit();
 
@@ -272,14 +315,18 @@ public class ProxySettingsActivity extends BaseFragment {
 
         final View.OnClickListener typeCellClickListener = view -> setProxyType((Integer) view.getTag(), true);
 
-        for (int a = 0; a < 2; a++) {
+        for (int a = 0; a < 3; a++) {
             typeCell[a] = new RadioCell(context);
             typeCell[a].setBackground(Theme.getSelectorDrawable(true));
             typeCell[a].setTag(a);
-            if (a == 0) {
+            if (a == TYPE_SOCKS5) {
                 typeCell[a].setText(LocaleController.getString(R.string.UseProxySocks5), a == currentType, true);
+            } else if (a == TYPE_MTPROTO) {
+                typeCell[a].setText(LocaleController.getString(R.string.UseProxyTelegram), a == currentType, true);
             } else {
-                typeCell[a].setText(LocaleController.getString(R.string.UseProxyTelegram), a == currentType, false);
+                // MTProxy3 (WebSocket). No localised string exists yet — use a literal
+                // label matching the iOS UI.
+                typeCell[a].setText("MTProxy3 (WebSocket)", a == currentType, false);
             }
             linearLayout2.addView(typeCell[a], LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 50));
             typeCell[a].setOnClickListener(typeCellClickListener);
@@ -298,8 +345,8 @@ public class ProxySettingsActivity extends BaseFragment {
         }
         linearLayout2.addView(inputFieldsContainer, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
 
-        inputFields = new EditTextBoldCursor[5];
-        for (int a = 0; a < 5; a++) {
+        inputFields = new EditTextBoldCursor[6];
+        for (int a = 0; a < 6; a++) {
             FrameLayout container = new FrameLayout(context);
             inputFieldsContainer.addView(container, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 64));
 
@@ -414,6 +461,10 @@ public class ProxySettingsActivity extends BaseFragment {
                     inputFields[a].setHintText(LocaleController.getString(R.string.UseProxySecret));
                     inputFields[a].setText(currentProxyInfo.secret);
                     break;
+                case FIELD_WSPATH:
+                    inputFields[a].setHintText("WebSocket Path (e.g. /v1/api/mtpr)");
+                    inputFields[a].setText(currentProxyInfo.wsPath != null ? currentProxyInfo.wsPath : "");
+                    break;
             }
             inputFields[a].setSelection(inputFields[a].length());
 
@@ -516,7 +567,7 @@ public class ProxySettingsActivity extends BaseFragment {
                     }
                     params.append("port=").append(URLEncoder.encode(port, "UTF-8"));
                 }
-                if (currentType == 1) {
+                if (currentType == TYPE_MTPROTO || currentType == TYPE_MTPROTO3) {
                     url = "https://t.me/proxy?";
                     if (params.length() != 0) {
                         params.append("&");
@@ -561,7 +612,15 @@ public class ProxySettingsActivity extends BaseFragment {
         checkShareDone(false);
 
         currentType = -1;
-        setProxyType(TextUtils.isEmpty(currentProxyInfo.secret) ? 0 : 1, false);
+        int initialType;
+        if (TextUtils.isEmpty(currentProxyInfo.secret)) {
+            initialType = TYPE_SOCKS5;
+        } else if (isMtProxy3Secret(currentProxyInfo.secret)) {
+            initialType = TYPE_MTPROTO3;
+        } else {
+            initialType = TYPE_MTPROTO;
+        }
+        setProxyType(initialType, false);
 
         pasteType = -1;
         pasteString = null;
@@ -740,21 +799,28 @@ public class ProxySettingsActivity extends BaseFragment {
 
                 TransitionManager.beginDelayedTransition(linearLayout2, transitionSet);
             }
-            if (currentType == 0) {
+            if (currentType == TYPE_SOCKS5) {
                 bottomCells[0].setVisibility(View.VISIBLE);
                 bottomCells[1].setVisibility(View.GONE);
                 ((View) inputFields[FIELD_SECRET].getParent()).setVisibility(View.GONE);
                 ((View) inputFields[FIELD_PASSWORD].getParent()).setVisibility(View.VISIBLE);
                 ((View) inputFields[FIELD_USER].getParent()).setVisibility(View.VISIBLE);
-            } else if (currentType == 1) {
+                ((View) inputFields[FIELD_WSPATH].getParent()).setVisibility(View.GONE);
+            } else {
+                // TYPE_MTPROTO and TYPE_MTPROTO3 share the single-secret layout. Type3
+                // adds a WebSocket Path field used in the HTTP Upgrade request and is
+                // recognized at protocol level by the 0xff prefix in the secret.
                 bottomCells[0].setVisibility(View.GONE);
                 bottomCells[1].setVisibility(View.VISIBLE);
                 ((View) inputFields[FIELD_SECRET].getParent()).setVisibility(View.VISIBLE);
                 ((View) inputFields[FIELD_PASSWORD].getParent()).setVisibility(View.GONE);
                 ((View) inputFields[FIELD_USER].getParent()).setVisibility(View.GONE);
+                ((View) inputFields[FIELD_WSPATH].getParent()).setVisibility(
+                        currentType == TYPE_MTPROTO3 ? View.VISIBLE : View.GONE);
             }
-            typeCell[0].setChecked(currentType == 0, animated);
-            typeCell[1].setChecked(currentType == 1, animated);
+            typeCell[TYPE_SOCKS5].setChecked(currentType == TYPE_SOCKS5, animated);
+            typeCell[TYPE_MTPROTO].setChecked(currentType == TYPE_MTPROTO, animated);
+            typeCell[TYPE_MTPROTO3].setChecked(currentType == TYPE_MTPROTO3, animated);
         }
     }
 
