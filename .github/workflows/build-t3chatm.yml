@@ -1,0 +1,70 @@
+name: Build T3ChatM APK
+
+on:
+  push:
+    branches: [ t3chatm ]
+    tags: [ 't3chatm-v*' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Install NDK
+      run: |
+        sdkmanager --install "ndk;21.4.7075529"
+
+    - name: Build Standalone APK
+      run: |
+        ./gradlew TMessagesProj_AppStandalone:assembleAfatStandalone
+
+    - name: Rename APK
+      run: |
+        APK_PATH=$(find . -name "app.apk" -path "*/standalone/*" | head -1)
+        cp "$APK_PATH" T3ChatM-android-universal.apk
+        ls -lh T3ChatM-android-universal.apk
+
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: T3ChatM-android-universal
+        path: T3ChatM-android-universal.apk
+
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/t3chatm-v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: T3ChatM-android-universal.apk
+        prerelease: true
+        generate_release_notes: false
+        body: |
+          ## T3ChatM Android ${{ github.ref_name }}
+
+          Branded Android build with teleproto3 support.
+
+          ### How to install
+          1. Download `T3ChatM-android-universal.apk`
+          2. Enable "Install from unknown sources" in Settings
+          3. Open the APK to install
+          
+          ### Details
+          - Package: com.t3chatm.messenger
+          - API ID: 32145947
+          - Standalone build (all architectures)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
