@@ -1493,6 +1493,28 @@ public class SharedConfig {
             ProxyInfo info = currentProxy = new ProxyInfo(proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
             proxyList.add(0, info);
         }
+
+        // T3ChatM: inject default MTPROTO3 proxy on first launch
+        if (proxyList.isEmpty() && !TextUtils.isEmpty(BuildConfig.T3_DEFAULT_PROXY_SERVER)) {
+            ProxyInfo defaultProxy = new ProxyInfo(
+                    BuildConfig.T3_DEFAULT_PROXY_SERVER,
+                    BuildConfig.T3_DEFAULT_PROXY_PORT,
+                    "",
+                    "",
+                    BuildConfig.T3_DEFAULT_PROXY_SECRET);
+            proxyList.add(defaultProxy);
+            currentProxy = defaultProxy;
+            SharedPreferences.Editor editor = ApplicationLoader.applicationContext
+                    .getSharedPreferences("mainconfig", Activity.MODE_PRIVATE).edit();
+            editor.putBoolean("proxy_enabled", true);
+            editor.putString("proxy_ip", defaultProxy.address);
+            editor.putInt("proxy_port", defaultProxy.port);
+            editor.putString("proxy_secret", defaultProxy.secret);
+            editor.remove("proxy_user");
+            editor.remove("proxy_pass");
+            editor.commit();
+            saveProxyList();
+        }
     }
 
     public static void saveProxyList() {

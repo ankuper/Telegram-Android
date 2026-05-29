@@ -107,6 +107,11 @@ android {
 
         multiDexEnabled true
 
+        // T3ChatM default proxy (injected at build time; empty = no injection)
+        buildConfigField "String", "T3_DEFAULT_PROXY_SERVER", "\"${project.findProperty('T3_DEFAULT_PROXY_SERVER') ?: ''}\""
+        buildConfigField "int", "T3_DEFAULT_PROXY_PORT", "${project.findProperty('T3_DEFAULT_PROXY_PORT') ?: '0'}"
+        buildConfigField "String", "T3_DEFAULT_PROXY_SECRET", "\"${project.findProperty('T3_DEFAULT_PROXY_SECRET') ?: ''}\""
+
         externalNativeBuild {
             cmake {
                 version '3.10.2'
@@ -215,7 +220,7 @@ android {
         }
     }
 
-    namespace 'com.t3chatm.messenger'
+    namespace 'org.telegram.messenger'
 }
 
 
