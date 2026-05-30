@@ -385,7 +385,18 @@ add_library(${NATIVE_LIB} SHARED
         genann.c
         secureid_ocr.cpp
         tde2e/bridge.cpp
+        teleproto3_jni.cpp
 )
+
+# === TYPE3-PROXY BEGIN ===
+# libteleproto3 — pre-compiled per ABI (cross-compiled with NDK + BoringSSL).
+# Build script: teleproto3/ci/build-android.sh
+# Output layout: teleproto3/{ABI}/libteleproto3.a
+add_library(teleproto3_shim STATIC IMPORTED)
+set_target_properties(teleproto3_shim PROPERTIES
+    IMPORTED_LOCATION ${CMAKE_HOME_DIRECTORY}/teleproto3/${ANDROID_ABI}/libteleproto3.a
+)
+# === TYPE3-PROXY END ===
 
 target_compile_options(${NATIVE_LIB} PUBLIC
         -ffast-math -Os -funroll-loops -ffast-math -fno-strict-aliasing -fno-math-errno)
@@ -637,11 +648,13 @@ target_include_directories(${NATIVE_LIB} PUBLIC
         tgcalls/
         webrtc/
         tde2e/include
+        teleproto3/include
 )
 
 target_link_options(${NATIVE_LIB} PRIVATE "-Wl,-z,max-page-size=16384")
 target_link_options(${NATIVE_LIB} PRIVATE "-Wl,-z,common-page-size=16384")
 target_link_libraries(${NATIVE_LIB}
+        teleproto3_shim
         -Wl,--whole-archive rnnoise openh264 voipandroid -Wl,--no-whole-archive
         tgvoip
         tgcalls

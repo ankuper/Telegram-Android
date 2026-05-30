@@ -28,6 +28,18 @@ jobs:
     - name: Install NDK
       run: |
         sdkmanager --install "ndk;21.4.7075529"
+        echo "NDK_ROOT=$ANDROID_SDK_ROOT/ndk/21.4.7075529" >> $GITHUB_ENV
+
+    - name: Build libteleproto3.a for Android ABIs
+      run: |
+        git clone --depth=1 https://github.com/ankuper/teleproto3.git /tmp/teleproto3
+        bash /tmp/teleproto3/ci/build-android.sh \
+          --ndk "$NDK_ROOT" \
+          --boringssl "$GITHUB_WORKSPACE/TMessagesProj/jni/boringssl" \
+          --out "$GITHUB_WORKSPACE/TMessagesProj/jni/teleproto3"
+        ls -lh TMessagesProj/jni/teleproto3/arm64-v8a/libteleproto3.a \
+               TMessagesProj/jni/teleproto3/armeabi-v7a/libteleproto3.a \
+               TMessagesProj/jni/teleproto3/x86_64/libteleproto3.a
 
     - name: Build Standalone APK
       run: |

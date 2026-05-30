@@ -23,6 +23,7 @@ import com.google.android.play.core.integrity.IntegrityTokenResponse;
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig;
 
 import org.json.JSONArray;
+import org.telegram.messenger.Type3ShimController;
 import org.json.JSONObject;
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AndroidUtilities;
@@ -941,6 +942,23 @@ public class ConnectionsManager extends BaseController {
         if (secret == null) {
             secret = "";
         }
+
+        /* === TYPE3-PROXY BEGIN === */
+        // Type3 proxy (0xff-prefixed secret): route through localhost SOCKS5 shim.
+        if (enabled && !TextUtils.isEmpty(address) && Type3ShimController.isType3Secret(secret)) {
+            boolean shimOk = Type3ShimController.start(address, port, "/", secret);
+            if (shimOk) {
+                address  = "127.0.0.1";
+                port     = Type3ShimController.getPort();
+                username = Type3ShimController.getUser();
+                password = Type3ShimController.getPass();
+                secret   = ""; // tgnet uses empty secret for SOCKS5
+            }
+            // shimOk=false: fall through with original params so tgnet tries anyway
+        } else if (!enabled || !Type3ShimController.isType3Secret(secret)) {
+            Type3ShimController.stop();
+        }
+        /* === TYPE3-PROXY END === */
 
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             if (enabled && !TextUtils.isEmpty(address)) {

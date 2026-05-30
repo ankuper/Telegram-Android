@@ -1,0 +1,316 @@
+/*
+ * t3.h — libteleproto3 public API.
+ *
+ * This is the reference implementation of the Type3 protocol.
+ * Normative behaviour is defined in spec/. Where they differ, spec/ wins.
+ * File a bug or errata at https://github.com/ankuper/teleproto3/issues.
+ *
+ * Stability: this header is the ONLY stable surface of the library.
+ * External consumers (server/, tdesktop fork, iOS fork, Android fork)
+ * MUST depend on this header alone. Everything under lib/src/ is
+ * private and subject to change without notice.
+ */
+
+/*
+ * Stability: Frozen for lib-v0.1.x (ABI levels 0.1.0–0.1.3). lib-v0.2.0
+ * adds padding/splitting API (Epic 11). Adding a new function or a new
+ * field to t3_callbacks_t (beyond the forward-compat struct_size sentinel)
+ * is permitted in minor bumps. Adding a new enumerant to t3_result_t is
+ * permitted in any patch and consumers MUST treat unknown values as
+ * T3_ERR_INTERNAL. Little-endian byte order is normative for every
+ * multi-byte field on the wire (cross-ref spec/wire-format.md §3).
+ */
+
+#ifndef TELEPROTO3_T3_H
+#define TELEPROTO3_T3_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stddef.h>
+#include <stdint.h>
+
+/* T3_API — public-symbol export marker.
+ *
+ * MSVC (Story 1-11): _MSC_VER detection gates __declspec.
+ *   T3_STATIC_LIB  — propagated by CMake to consumers of the static archive;
+ *                    suppresses all decoration (no dllexport/dllimport needed).
+ *   T3_CONSUMER    — define before including t3.h when linking the DLL from
+ *                    a consumer translation unit (future shared-library scope).
+ *   default        — building the library itself → dllexport.
+ *
+ * GCC/Clang/Cygwin: __attribute__((visibility("default"))) unchanged.
+ */
+#if defined(_MSC_VER)
+#  if defined(T3_STATIC_LIB)
+#    define T3_API
+#  elif defined(T3_CONSUMER)
+#    define T3_API __declspec(dllimport)
+#  else
+#    define T3_API __declspec(dllexport)
+#  endif
+#elif defined(__GNUC__) || defined(__clang__) || defined(__CYGWIN__)
+#  define T3_API __attribute__((visibility("default")))
+#else
+#  define T3_API
+#endif
+
+#define T3_LIB_VERSION_MAJOR 0
+#define T3_LIB_VERSION_MINOR 2
+#define T3_LIB_VERSION_PATCH 0
+
+#define T3_ABI_VERSION_MAJOR 0
+#define T3_ABI_VERSION_MINOR 2
+#define T3_ABI_VERSION_PATCH 0
+
+/* MSVC's C++ frontend doesn't accept the C11 _Static_assert keyword. Pick the
+   right keyword per language: static_assert in C++11+, _Static_assert in C11+,
+   no-op otherwise. */
+#if defined(__cplusplus)
+#  define T3_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#  define T3_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#else
+#  define T3_STATIC_ASSERT(cond, msg)
+#endif
+
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
+#  if !defined(T3_LIB_VERSION_MAJOR) || !defined(T3_LIB_VERSION_MINOR) || !defined(T3_LIB_VERSION_PATCH)
+#    error "T3_LIB_VERSION_* macros missing"
+#  endif
+#  if !defined(T3_ABI_VERSION_MAJOR) || !defined(T3_ABI_VERSION_MINOR) || !defined(T3_ABI_VERSION_PATCH)
+#    error "T3_ABI_VERSION_* macros missing"
+#  endif
+T3_STATIC_ASSERT(T3_LIB_VERSION_MAJOR == T3_ABI_VERSION_MAJOR, "lib and ABI MAJOR must match");
+T3_STATIC_ASSERT(T3_LIB_VERSION_MINOR == T3_ABI_VERSION_MINOR, "lib and ABI MINOR must match");
+T3_STATIC_ASSERT(T3_LIB_VERSION_PATCH == T3_ABI_VERSION_PATCH, "lib and ABI PATCH must match");
+T3_STATIC_ASSERT(T3_ABI_VERSION_MAJOR >= 0 && T3_ABI_VERSION_MINOR >= 0 && T3_ABI_VERSION_PATCH >= 0,
+                 "ABI version components must be non-negative");
+#endif
+
+#define T3_INTERNAL_STR_(x) #x
+#define T3_INTERNAL_STR(x)  T3_INTERNAL_STR_(x)
+
+/* --------------------------------------------------------------------
+ * Result codes — X-macro source of truth (PR2 / D2 resolution)
+ *
+ * lib→wire error mapping (Story 7-1):
+ * The wire-error class set in spec/secret-format.md §5 is closed at three
+ * values: {MALFORMED, INVALID_ARG, UNSUPPORTED_VERSION}. The lib-internal
+ * t3_result_t enum is granular for diagnostics, metrics, and producer-side
+ * UX. Conformance vectors carry the lib code as a non-normative hint via
+ * expect.detail.lib_code; third-party implementations MAY ignore the hint.
+ *
+ *   T3_ERR_DOMAIN_TOO_LONG  → wire MALFORMED (rule "ceiling-exceeded")
+ *   T3_ERR_INVALID_CONFIG   → wire INVALID_ARG
+ *   (All other T3_ERR_* map per spec/secret-format.md §2.1 rule table)
+ * -------------------------------------------------------------------- */
+#define T3_RESULT_LIST(X)                                                                          \
+    X(T3_OK,                              0, "ok")                                                 \
+    X(T3_ERR_INVALID_ARG,                -1, "invalid argument")                                   \
+    X(T3_ERR_MALFORMED,                  -2, "malformed input")                                    \
+    X(T3_ERR_UNSUPPORTED_VERSION,        -3, "unsupported version")                                \
+    X(T3_ERR_RNG,                        -4, "rng failure")                                        \
+    X(T3_ERR_HOST_EMPTY,                 -5, "host field is empty")                                \
+    X(T3_ERR_HOST_INVALID,               -6, "host field is invalid")                              \
+    X(T3_ERR_KEY_INVALID,                -7, "key field is invalid")                               \
+    X(T3_ERR_BUF_TOO_SMALL,              -8, "output buffer too small")                            \
+    X(T3_ERR_HOST_NON_ASCII,            -10, "host contains non-ASCII characters (rejected at v0.1.0)") \
+    X(T3_ERR_CLOCK_BACKWARDS,           -11, "monotonic clock went backwards")                     \
+    X(T3_ERR_PATH_MISSING_LEADING_SLASH,-12, "path does not start with '/'")                       \
+    X(T3_ERR_PATH_TRAILING_SLASH,       -13, "path has a trailing slash")                          \
+    X(T3_ERR_PATH_PERCENT_ENCODED,      -14, "path contains percent-encoded octets")               \
+    X(T3_ERR_PATH_EMPTY_SEGMENT,        -15, "path contains an empty segment ('//')")              \
+    X(T3_ERR_PATH_NON_ASCII,            -16, "path contains non-ASCII characters (rejected at v0.1.0)") \
+    X(T3_ERR_DOMAIN_TOO_LONG,           -17, "domain field exceeds 512-byte ceiling (A-005)")           \
+    X(T3_ERR_INVALID_CONFIG,            -18, "invalid configuration value (A-009)")                    \
+    X(T3_ERR_INTERNAL,                  -99, "internal error")
+
+#define T3_RESULT_ENUM_ENTRY(name, value, msg) name = value,
+typedef enum {
+    T3_RESULT_LIST(T3_RESULT_ENUM_ENTRY)
+    T3_RESULT_T_FORCE_INT_STORAGE = 0x7fffffff
+} t3_result_t;
+#undef T3_RESULT_ENUM_ENTRY
+
+/* --------------------------------------------------------------------
+ * Version-negotiation action (spec/wire-format.md §6)
+ * -------------------------------------------------------------------- */
+typedef enum {
+    T3_VERSION_OK              = 0,
+    T3_VERSION_SILENT_CLOSE    = 1,
+    T3_VERSION_RETRY_DOWNGRADE = 2
+} t3_version_action_t;
+
+/* --------------------------------------------------------------------
+ * Anti-probe retry state (spec/anti-probe.md §7; FR43)
+ * -------------------------------------------------------------------- */
+typedef enum {
+    T3_RETRY_OK    = 0,
+    T3_RETRY_TIER1 = 1,
+    T3_RETRY_TIER2 = 2,
+    T3_RETRY_TIER3 = 3
+} t3_retry_state_t;
+
+/* --------------------------------------------------------------------
+ * Opaque handle types
+ * -------------------------------------------------------------------- */
+typedef struct t3_secret  t3_secret_t;
+typedef struct t3_session t3_session_t;
+
+/* --------------------------------------------------------------------
+ * Session Header POD (spec/wire-format.md §3; AR-S1)
+ *
+ * flags is stored in host byte order in this struct. On the wire it is
+ * little-endian. t3_header_parse converts LE→host; t3_header_serialise
+ * converts host→LE. Cross-ref spec/wire-format.md §3.
+ * -------------------------------------------------------------------- */
+typedef struct {
+    uint8_t  command_type;
+    uint8_t  version;
+    uint16_t flags;   /* host byte order in struct; little-endian on wire */
+} t3_header_t;
+
+/* command_type named constants (spec/wire-format.md §3 registry + Epic 1a amendment W-003).
+ * Sentinels 0x00 and 0xFF are MALFORMED on receipt; MUST NOT be emitted.
+ * All values not listed below are reserved — MALFORMED at v0.1.1.
+ */
+#define T3_CMD_MTPROTO_PASSTHROUGH 0x01u  /* canonical production command (FR1) */
+#define T3_CMD_HTTP_DECOY_MIMIC    0x02u  /* reserved-not-allocated at v0.1.x (FR3);
+                                           * sender MUST NOT emit; receiver rejects
+                                           * (MALFORMED at version=0x01;
+                                           *  UNSUPPORTED_VERSION at version>0x01) */
+#define T3_CMD_BENCH               0x04u  /* Epic 1a: experimental, dev-only —
+                                           * server handler MUST be gated by build flag + runtime config;
+                                           * SHALL NOT appear in production traffic */
+
+/* ====================================================================
+ * Padding frame constants (spec/wire-format.md §2.1; Story 11-1 W-004)
+ * ==================================================================== */
+#define T3_FLAG_PADDING    0x0001u  /* Session Header flags bit 0 (§3) */
+#define T3_PADDING_MARKER  0xFEu    /* First decrypted byte of a padding frame (§2.1) */
+
+typedef enum {
+    T3_TRANSPORT_WS          = 0,
+    T3_TRANSPORT_HTTP_STREAM = 1
+} t3_transport_mode_t;
+
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
+T3_STATIC_ASSERT(sizeof(t3_header_t) == 4,
+                 "t3_header_t must be exactly 4 bytes (no padding) — wire shape frozen since v0.1.0");
+#endif
+
+/* --------------------------------------------------------------------
+ * Host-stack callbacks (epic-1-style-guide §10; AR-S12)
+ * -------------------------------------------------------------------- */
+typedef struct {
+    size_t   struct_size;
+    int64_t  (*lower_send)(void *ctx, const uint8_t *buf, size_t len);
+    int64_t  (*lower_recv)(void *ctx, uint8_t *buf, size_t len);
+    int64_t  (*frame_send)(void *ctx, const uint8_t *buf, size_t len, int is_binary);
+    int64_t  (*frame_recv)(void *ctx, uint8_t *buf, size_t cap, int *out_is_binary);
+    int      (*rng)(void *ctx, uint8_t *buf, size_t len);
+    uint64_t (*monotonic_ns)(void *ctx);
+#if defined(__GNUC__) || defined(__clang__)
+    void     (*log_sink)(void *ctx, int level, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+#else
+    void     (*log_sink)(void *ctx, int level, const char *fmt, ...);
+#endif
+    void    *ctx;
+} t3_callbacks_t;
+
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
+T3_STATIC_ASSERT(offsetof(t3_callbacks_t, struct_size) == 0,
+                 "t3_callbacks_t.struct_size must be the first field for forward-compat sentinel");
+#endif
+
+/* --------------------------------------------------------------------
+ * Producer-side input struct (AC #15; spec/secret-format.md §3)
+ * -------------------------------------------------------------------- */
+typedef struct {
+    uint8_t     key[16];
+    const char *host;
+    const char *path;
+} t3_secret_fields;
+
+/* ====================================================================
+ * Secret parsing / serialisation  (spec/secret-format.md §1–4)
+ * ==================================================================== */
+T3_API t3_result_t t3_secret_parse(const uint8_t *buf, size_t len, t3_secret_t **out);
+T3_API void        t3_secret_free(t3_secret_t *s);
+T3_API t3_result_t t3_secret_serialise(const t3_secret_fields *in, uint8_t *out, size_t *inout_len);
+T3_API t3_result_t t3_secret_validate_host(const char *host);
+T3_API t3_result_t t3_secret_validate_path(const char *path);
+T3_API void        t3_secret_zeroise(t3_secret_fields *fields);
+T3_API int         t3_secret_transport_mode(const t3_secret_t *s);
+
+/* ====================================================================
+ * Session management  (spec/wire-format.md §1)
+ * ==================================================================== */
+T3_API t3_result_t t3_session_new(const t3_secret_t *s, t3_session_t **out);
+T3_API void        t3_session_free(t3_session_t *sess);
+T3_API t3_result_t t3_session_bind_callbacks(t3_session_t *sess, const t3_callbacks_t *cb);
+
+/* ====================================================================
+ * Session Header encode/decode  (spec/wire-format.md §3; AR-S1)
+ * ==================================================================== */
+T3_API t3_result_t t3_header_parse(const uint8_t buf[4], t3_header_t *out);
+T3_API t3_result_t t3_header_serialise(const t3_header_t *in, uint8_t buf[4]);
+
+/* ====================================================================
+ * Version negotiation  (spec/wire-format.md §6)
+ * ==================================================================== */
+T3_API t3_result_t t3_session_negotiate_version(t3_session_t *sess,
+                                                uint8_t peer_version,
+                                                t3_version_action_t *out);
+
+/* ====================================================================
+ * Anti-probe: silent-close delay  (spec/anti-probe.md §8; AR-C2)
+ * ==================================================================== */
+T3_API t3_result_t t3_silent_close_delay_sample_ns(t3_session_t *sess, uint64_t *out_ns);
+
+/* ====================================================================
+ * Anti-probe: retry state machine  (spec/anti-probe.md §7; FR43)
+ * ==================================================================== */
+T3_API t3_result_t      t3_retry_record_close(t3_session_t *sess,
+                                              uint64_t now_monotonic_ns,
+                                              t3_retry_state_t *out_state);
+T3_API t3_retry_state_t t3_retry_get_state(const t3_session_t *sess);
+T3_API t3_result_t      t3_retry_user_retry(t3_session_t *sess);
+
+/* ====================================================================
+ * Padding and splitting (spec/wire-format.md §2.1; Epic 11)
+ * ==================================================================== */
+T3_API t3_result_t t3_padding_generate(t3_session_t *sess,
+                                       uint8_t *buf, size_t min_len,
+                                       size_t max_len, size_t *out_len);
+
+static inline int t3_padding_detect(uint8_t first_decrypted_byte) {
+    return first_decrypted_byte == T3_PADDING_MARKER;
+}
+
+T3_API t3_result_t t3_split_plan(t3_session_t *sess,
+                                 size_t total_len,
+                                 size_t min_chunk, size_t max_chunk,
+                                 size_t *plan, size_t max_chunks,
+                                 size_t *out_count);
+
+/* ====================================================================
+ * HTTP stream framing (spec/wire-format.md §2.2; Epic 12)
+ * ==================================================================== */
+T3_API t3_result_t t3_http_chunk_write(uint8_t *out, size_t out_cap, const uint8_t *data, size_t data_len, size_t *out_written);
+T3_API t3_result_t t3_http_chunk_parse(const uint8_t *buf, size_t buf_len, const uint8_t **out_data, size_t *out_data_len, size_t *out_consumed);
+T3_API t3_result_t t3_http_chunk_write_terminal(uint8_t *out, size_t out_cap, size_t *out_written);
+
+/* ====================================================================
+ * Utility
+ * ==================================================================== */
+T3_API const char *t3_strerror(t3_result_t rc);
+T3_API const char *t3_abi_version_string(void);
+
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
+
+#endif /* TELEPROTO3_T3_H */
