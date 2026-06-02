@@ -42,8 +42,14 @@ jobs:
                TMessagesProj/jni/teleproto3/x86_64/libteleproto3.a
 
     - name: Build Standalone APK
+      env:
+        T3_DEFAULT_PROXY_SECRET: ${{ secrets.T3_DEFAULT_PROXY_SECRET }}
       run: |
-        ./gradlew TMessagesProj_AppStandalone:assembleAfatStandalone
+        if [ -z "$T3_DEFAULT_PROXY_SECRET" ]; then
+          echo "::warning::T3_DEFAULT_PROXY_SECRET secret is empty — APK will ship WITHOUT a default proxy."
+        fi
+        ./gradlew TMessagesProj_AppStandalone:assembleAfatStandalone \
+          -PT3_DEFAULT_PROXY_SECRET="$T3_DEFAULT_PROXY_SECRET"
 
     - name: Rename APK
       run: |

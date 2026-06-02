@@ -1494,8 +1494,13 @@ public class SharedConfig {
             proxyList.add(0, info);
         }
 
-        // T3ChatM: inject default MTPROTO3 proxy on first launch
-        if (proxyList.isEmpty() && !TextUtils.isEmpty(BuildConfig.T3_DEFAULT_PROXY_SERVER)) {
+        // T3ChatM: inject default MTPROTO3 proxy on first launch.
+        // Require a non-empty SECRET too: without it the injected proxy is dead
+        // (and not Type3 — no 0xff marker). The secret is supplied at build time
+        // via the T3_DEFAULT_PROXY_SECRET CI secret; if it is absent, inject nothing.
+        if (proxyList.isEmpty()
+                && !TextUtils.isEmpty(BuildConfig.T3_DEFAULT_PROXY_SERVER)
+                && !TextUtils.isEmpty(BuildConfig.T3_DEFAULT_PROXY_SECRET)) {
             ProxyInfo defaultProxy = new ProxyInfo(
                     BuildConfig.T3_DEFAULT_PROXY_SERVER,
                     BuildConfig.T3_DEFAULT_PROXY_PORT,
