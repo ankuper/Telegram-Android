@@ -726,6 +726,18 @@ public class ConnectionsManager extends BaseController {
         if (secret == null) {
             secret = "";
         }
+
+        /* === TYPE3-PROXY BEGIN === */
+        // Route Type3 ping-check through the running shim instead of hitting the server directly.
+        if (Type3ShimController.isType3Secret(secret) && Type3ShimController.isRunning()) {
+            address  = "127.0.0.1";
+            port     = Type3ShimController.getPort();
+            username = Type3ShimController.getUser();
+            password = Type3ShimController.getPass();
+            secret   = "";
+        }
+        /* === TYPE3-PROXY END === */
+
         return native_checkProxy(currentAccount, address, port, username, password, secret, requestTimeDelegate);
     }
 
