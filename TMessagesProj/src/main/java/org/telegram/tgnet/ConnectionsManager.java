@@ -969,6 +969,11 @@ public class ConnectionsManager extends BaseController {
         // Type3 proxy (0xff-prefixed secret): route through localhost SOCKS5 shim.
         if (enabled && !TextUtils.isEmpty(address) && Type3ShimController.isType3Secret(secret)) {
             boolean shimOk = Type3ShimController.start(address, port, "/", secret);
+            if (!shimOk) {
+                // Retry once after a brief pause — the previous shim may not have released the port yet.
+                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                shimOk = Type3ShimController.start(address, port, "/", secret);
+            }
             if (shimOk) {
                 address  = "127.0.0.1";
                 port     = Type3ShimController.getPort();
@@ -976,7 +981,10 @@ public class ConnectionsManager extends BaseController {
                 password = Type3ShimController.getPass();
                 secret   = ""; // tgnet uses empty secret for SOCKS5
             }
-            // shimOk=false: fall through with original params so tgnet tries anyway
+            if (BuildVars.LOGS_ENABLED) {
+                FileLog.d("Type3Shim: setProxy enabled=" + enabled + " shimOk=" + shimOk
+                        + " port=" + Type3ShimController.getPort());
+            }
         } else if (!enabled || !Type3ShimController.isType3Secret(secret)) {
             Type3ShimController.stop();
         }
