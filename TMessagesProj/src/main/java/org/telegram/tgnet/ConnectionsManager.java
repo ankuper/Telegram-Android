@@ -617,7 +617,17 @@ public class ConnectionsManager extends BaseController {
         int proxyPort = preferences.getInt("proxy_port", 1080);
 
         if (preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress)) {
-            native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
+            /* === TYPE3-PROXY BEGIN === */
+            if (Type3ShimController.isType3Secret(proxySecret) && !Type3ShimController.isRunning()) {
+                Type3ShimController.start(proxyAddress, proxyPort, "/", proxySecret);
+            }
+            if (Type3ShimController.isType3Secret(proxySecret) && Type3ShimController.isRunning()) {
+                native_setProxySettings(currentAccount, "127.0.0.1", Type3ShimController.getPort(),
+                        Type3ShimController.getUser(), Type3ShimController.getPass(), "");
+            } else {
+                native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
+            }
+            /* === TYPE3-PROXY END === */
         }
         String installer = "";
         try {
