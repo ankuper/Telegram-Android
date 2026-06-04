@@ -494,6 +494,60 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         proxySecret = &ConnectionsManager::getInstance(instanceNum).proxySecret;
     }
 
+    /* === TYPE3-PROXY BEGIN === */
+    if (!proxySecret->empty() && proxySecret->size() > 17 && (uint8_t)(*proxySecret)[0] == 0xff) {
+        std::string t3Key = proxySecret->substr(1, 16);
+        std::string t3Domain = proxySecret->substr(17);
+
+        std::string t3Host, t3Path;
+        size_t slashPos = t3Domain.find('/');
+        if (slashPos != std::string::npos) {
+            t3Host = t3Domain.substr(0, slashPos);
+            t3Path = "/" + t3Domain.substr(slashPos + 1);
+        } else {
+            t3Host = t3Domain;
+            t3Path = "/";
+        }
+
+        std::string endpointUrl = "https://" + t3Host + ":443" + t3Path;
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 connecting to %s", this, endpointUrl.c_str());
+
+        t3Cleanup();
+        t3_result_t rc = t3_client_create(
+            endpointUrl.c_str(),
+            (const uint8_t *)t3Key.data(),
+            0,
+            &t3Stream
+        );
+        if (rc != T3_OK || t3Stream == nullptr) {
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 t3_client_create failed: %d", this, rc);
+            closeSocket(1, -1);
+            return;
+        }
+        socketFd = t3_client_get_fd(t3Stream);
+        if (socketFd < 0) {
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 get_fd returned -1", this);
+            t3Cleanup();
+            closeSocket(1, -1);
+            return;
+        }
+        proxyAuthState = 20;
+        int epolFd = ConnectionsManager::getInstance(instanceNum).epolFd;
+        eventMask.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
+        eventMask.data.ptr = eventObject;
+        if (epoll_ctl(epolFd, EPOLL_CTL_ADD, socketFd, &eventMask) != 0) {
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 epoll_ctl add failed", this);
+            t3Cleanup();
+            closeSocket(1, -1);
+            return;
+        }
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 stream created, fd=%d, pumping handshake", this, socketFd);
+        onConnectedSent = false;
+        lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+        return;
+    }
+    /* === TYPE3-PROXY END === */
+
     if (!proxyAddress->empty()) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p) connecting via proxy %s:%d secret[%d]", this, proxyAddress->c_str(), proxyPort, (int) proxySecret->size());
         if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -664,9 +718,27 @@ int32_t ConnectionSocket::checkSocketError(int32_t *error) {
     return (ret || code) != 0;
 }
 
+/* === TYPE3-PROXY BEGIN === */
+void ConnectionSocket::t3Cleanup() {
+    if (t3Stream != nullptr) {
+        t3_client_destroy(t3Stream);
+        t3Stream = nullptr;
+    }
+}
+/* === TYPE3-PROXY END === */
+
 void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     ConnectionsManager::getInstance(instanceNum).detachConnection(this);
+    /* === TYPE3-PROXY BEGIN === */
+    if (t3Stream != nullptr) {
+        if (socketFd >= 0) {
+            epoll_ctl(ConnectionsManager::getInstance(instanceNum).epolFd, EPOLL_CTL_DEL, socketFd, nullptr);
+        }
+        t3Cleanup();
+        socketFd = -1;
+    } else
+    /* === TYPE3-PROXY END === */
     if (socketFd >= 0) {
         epoll_ctl(ConnectionsManager::getInstance(instanceNum).epolFd, EPOLL_CTL_DEL, socketFd, nullptr);
         if (close(socketFd) != 0) {
@@ -688,6 +760,72 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
 }
 
 void ConnectionSocket::onEvent(uint32_t events) {
+    /* === TYPE3-PROXY BEGIN === */
+    if (t3Stream != nullptr) {
+        t3_client_state_t st = t3_client_get_state(t3Stream);
+        if (st == T3_CLIENT_STATE_ERROR) {
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 error: %s", this, t3_client_last_error(t3Stream));
+            closeSocket(1, -1);
+            return;
+        }
+        if (proxyAuthState == 20) {
+            t3_result_t rc = t3_client_pump(t3Stream);
+            st = t3_client_get_state(t3Stream);
+            if (st == T3_CLIENT_STATE_READY) {
+                if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 handshake complete, ready", this);
+                proxyAuthState = 21;
+                onConnectedSent = true;
+                onConnected();
+                adjustWriteOp();
+            } else if (st == T3_CLIENT_STATE_ERROR) {
+                if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 pump error: %s", this, t3_client_last_error(t3Stream));
+                closeSocket(1, -1);
+            }
+            return;
+        }
+        if (proxyAuthState == 21) {
+            if (events & EPOLLIN) {
+                NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
+                while (true) {
+                    buffer->rewind();
+                    size_t outLen = 0;
+                    t3_result_t rc = t3_client_read(t3Stream, buffer->bytes(), READ_BUFFER_SIZE, &outLen);
+                    if (rc == T3_ERR_BUF_TOO_SMALL || outLen == 0) {
+                        break;
+                    }
+                    if (rc != T3_OK) {
+                        if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 read error: %d", this, rc);
+                        closeSocket(1, -1);
+                        return;
+                    }
+                    buffer->limit((uint32_t) outLen);
+                    lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                    onReceivedData(buffer);
+                }
+            }
+            if (events & EPOLLOUT) {
+                if (outgoingByteStream->hasData()) {
+                    NativeByteBuffer *buf = BuffersStorage::getInstance().getFreeBuffer(outgoingByteStream->available());
+                    outgoingByteStream->get(buf);
+                    t3_result_t rc = t3_client_write(t3Stream, buf->bytes(), buf->limit());
+                    buf->reuse();
+                    if (rc != T3_OK && rc != T3_ERR_BUF_TOO_SMALL) {
+                        if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 write error: %d", this, rc);
+                        closeSocket(1, -1);
+                        return;
+                    }
+                }
+                adjustWriteOp();
+            }
+            if (events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
+                if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 disconnect event", this);
+                closeSocket(1, -1);
+            }
+            return;
+        }
+    }
+    /* === TYPE3-PROXY END === */
+
     if (events & EPOLLIN) {
         int32_t error;
         if (checkSocketError(&error) != 0) {
@@ -712,6 +850,12 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 if (readCount > 0) {
                     buffer->limit((uint32_t) readCount);
                     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                    /* === TYPE3-PROXY BEGIN === */
+                    if (proxyAuthState == 20 || proxyAuthState == 21) {
+                        // Type3: should not reach here — reads go through t3_client_read below
+                        break;
+                    }
+                    /* === TYPE3-PROXY END === */
                     if (proxyAuthState == 11) {
                         if (LOGS_ENABLED) DEBUG_D("connection(%p) TLS received %d", this, (int) readCount);
                         size_t newBytesRead = bytesRead + readCount;
@@ -1092,7 +1236,7 @@ void ConnectionSocket::adjustWriteOp() {
         return;
     }
     eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
-    if (proxyAuthState == 0 && (outgoingByteStream->hasData() || !onConnectedSent) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10) {
+    if (proxyAuthState == 0 && (outgoingByteStream->hasData() || !onConnectedSent) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10 || proxyAuthState == 20 || (proxyAuthState == 21 && outgoingByteStream->hasData())) {
         eventMask.events |= EPOLLOUT;
     }
     eventMask.data.ptr = eventObject;

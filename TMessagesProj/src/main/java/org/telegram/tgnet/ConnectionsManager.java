@@ -23,7 +23,6 @@ import com.google.android.play.core.integrity.IntegrityTokenResponse;
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig;
 
 import org.json.JSONArray;
-import org.telegram.messenger.Type3ShimController;
 import org.json.JSONObject;
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AndroidUtilities;
@@ -616,25 +615,8 @@ public class ConnectionsManager extends BaseController {
         String proxySecret = preferences.getString("proxy_secret", "");
         int proxyPort = preferences.getInt("proxy_port", 1080);
 
-        boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false);
-        android.util.Log.i("T3Diag", "init: account=" + currentAccount + " proxyEnabled=" + proxyEnabled
-                + " addr=" + proxyAddress + " port=" + proxyPort
-                + " secretLen=" + proxySecret.length()
-                + " isType3=" + Type3ShimController.isType3Secret(proxySecret)
-                + " shimRunning=" + Type3ShimController.isRunning());
-        if (proxyEnabled && !TextUtils.isEmpty(proxyAddress)) {
-            /* === TYPE3-PROXY BEGIN === */
-            if (Type3ShimController.isType3Secret(proxySecret) && !Type3ShimController.isRunning()) {
-                Type3ShimController.start(proxyAddress, proxyPort, "/", proxySecret);
-            }
-            if (Type3ShimController.isType3Secret(proxySecret) && Type3ShimController.isRunning()) {
-                android.util.Log.i("T3Diag", "init: routing account " + currentAccount + " -> 127.0.0.1:" + Type3ShimController.getPort());
-                native_setProxySettings(currentAccount, "127.0.0.1", Type3ShimController.getPort(),
-                        Type3ShimController.getUser(), Type3ShimController.getPass(), "");
-            } else {
-                native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
-            }
-            /* === TYPE3-PROXY END === */
+        if (preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress)) {
+            native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
         }
         String installer = "";
         try {
@@ -743,17 +725,6 @@ public class ConnectionsManager extends BaseController {
         if (secret == null) {
             secret = "";
         }
-
-        /* === TYPE3-PROXY BEGIN === */
-        // Route Type3 ping-check through the running shim instead of hitting the server directly.
-        if (Type3ShimController.isType3Secret(secret) && Type3ShimController.isRunning()) {
-            address  = "127.0.0.1";
-            port     = Type3ShimController.getPort();
-            username = Type3ShimController.getUser();
-            password = Type3ShimController.getPass();
-            secret   = "";
-        }
-        /* === TYPE3-PROXY END === */
 
         return native_checkProxy(currentAccount, address, port, username, password, secret, requestTimeDelegate);
     }
@@ -971,31 +942,6 @@ public class ConnectionsManager extends BaseController {
         if (secret == null) {
             secret = "";
         }
-
-        /* === TYPE3-PROXY BEGIN === */
-        // Type3 proxy (0xff-prefixed secret): route through localhost SOCKS5 shim.
-        if (enabled && !TextUtils.isEmpty(address) && Type3ShimController.isType3Secret(secret)) {
-            boolean shimOk = Type3ShimController.start(address, port, "/", secret);
-            if (!shimOk) {
-                // Retry once after a brief pause — the previous shim may not have released the port yet.
-                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
-                shimOk = Type3ShimController.start(address, port, "/", secret);
-            }
-            if (shimOk) {
-                address  = "127.0.0.1";
-                port     = Type3ShimController.getPort();
-                username = Type3ShimController.getUser();
-                password = Type3ShimController.getPass();
-                secret   = ""; // tgnet uses empty secret for SOCKS5
-            }
-            if (BuildVars.LOGS_ENABLED) {
-                FileLog.d("Type3Shim: setProxy enabled=" + enabled + " shimOk=" + shimOk
-                        + " port=" + Type3ShimController.getPort());
-            }
-        } else if (!enabled || !Type3ShimController.isType3Secret(secret)) {
-            Type3ShimController.stop();
-        }
-        /* === TYPE3-PROXY END === */
 
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             if (enabled && !TextUtils.isEmpty(address)) {

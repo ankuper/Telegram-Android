@@ -13,6 +13,10 @@
 #include <netinet/in.h>
 #include <string>
 
+/* === TYPE3-PROXY BEGIN === */
+#include "t3_client.h"
+/* === TYPE3-PROXY END === */
+
 class NativeByteBuffer;
 class ConnectionsManager;
 class ByteStream;
@@ -81,6 +85,11 @@ private:
     int8_t tlsState = 0;
 
     uint8_t proxyAuthState;
+
+    /* === TYPE3-PROXY BEGIN === */
+    t3_client_stream *t3Stream = nullptr;
+    void t3Cleanup();
+    /* === TYPE3-PROXY END === */
 
     int32_t checkSocketError(int32_t *error);
     void closeSocket(int32_t reason, int32_t error);

@@ -1429,9 +1429,6 @@ public class SharedConfig {
         if (proxyListLoaded) {
             return;
         }
-        if (proxyList == null) {
-            proxyList = new ArrayList<>();
-        }
         SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         String proxyAddress = preferences.getString("proxy_ip", "");
         String proxyUsername = preferences.getString("proxy_user", "");

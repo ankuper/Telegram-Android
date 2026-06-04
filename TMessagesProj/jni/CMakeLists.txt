@@ -212,9 +212,11 @@ set_target_properties(tgnet PROPERTIES
 target_compile_definitions(tgnet PUBLIC
         HAVE_PTHREAD)
 target_include_directories(tgnet PUBLIC
-        boringssl/include/)
+        boringssl/include/
+        teleproto3/include/)
 target_link_libraries(tgnet
-        crypto)
+        crypto
+        ${CMAKE_SOURCE_DIR}/teleproto3/${ANDROID_ABI}/libteleproto3.a)
 
 #rlottie
 add_library(rlottie STATIC
