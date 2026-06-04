@@ -616,12 +616,23 @@ public class ConnectionsManager extends BaseController {
         String proxySecret = preferences.getString("proxy_secret", "");
         int proxyPort = preferences.getInt("proxy_port", 1080);
 
-        if (preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress)) {
+        boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false);
+        if (BuildVars.LOGS_ENABLED) {
+            FileLog.d("Type3Shim init: account=" + currentAccount + " proxyEnabled=" + proxyEnabled
+                    + " addr=" + proxyAddress + " port=" + proxyPort
+                    + " secret=" + (proxySecret.length() > 4 ? proxySecret.substring(0, 4) + "..." : proxySecret)
+                    + " isType3=" + Type3ShimController.isType3Secret(proxySecret)
+                    + " shimRunning=" + Type3ShimController.isRunning());
+        }
+        if (proxyEnabled && !TextUtils.isEmpty(proxyAddress)) {
             /* === TYPE3-PROXY BEGIN === */
             if (Type3ShimController.isType3Secret(proxySecret) && !Type3ShimController.isRunning()) {
                 Type3ShimController.start(proxyAddress, proxyPort, "/", proxySecret);
             }
             if (Type3ShimController.isType3Secret(proxySecret) && Type3ShimController.isRunning()) {
+                if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("Type3Shim init: routing account " + currentAccount + " through 127.0.0.1:" + Type3ShimController.getPort());
+                }
                 native_setProxySettings(currentAccount, "127.0.0.1", Type3ShimController.getPort(),
                         Type3ShimController.getUser(), Type3ShimController.getPass(), "");
             } else {
