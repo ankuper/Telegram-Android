@@ -685,6 +685,10 @@ public class SharedConfig {
             showNotificationsForAllAccounts = preferences.getBoolean("AllAccounts", true);
 
             configLoaded = true;
+
+            // Load proxy list early so default proxy is written to SharedPreferences
+            // before ConnectionsManager.init() reads them.
+            loadProxyList();
         }
     }
 
