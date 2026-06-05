@@ -616,7 +616,13 @@ public class ConnectionsManager extends BaseController {
         int proxyPort = preferences.getInt("proxy_port", 1080);
 
         if (preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress)) {
+            android.util.Log.i("T3Diag", "init[" + currentAccount + "] proxy=" + proxyAddress + ":" + proxyPort
+                    + " secretLen=" + proxySecret.length()
+                    + " prefix=" + (proxySecret.length() >= 2 ? proxySecret.substring(0, 2) : "empty"));
             native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret);
+        } else {
+            android.util.Log.i("T3Diag", "init[" + currentAccount + "] NO PROXY enabled=" + preferences.getBoolean("proxy_enabled", false)
+                    + " addr=" + proxyAddress);
         }
         String installer = "";
         try {
