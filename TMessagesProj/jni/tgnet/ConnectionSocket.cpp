@@ -769,6 +769,7 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
 void ConnectionSocket::onEvent(uint32_t events) {
     /* === TYPE3-PROXY BEGIN === */
     if (t3Stream != nullptr) {
+        __android_log_print(ANDROID_LOG_INFO, "T3Native", "onEvent: events=0x%x proxyAuth=%d", events, proxyAuthState);
         t3_client_state_t st = t3_client_get_state(t3Stream);
         if (st == T3_CLIENT_STATE_ERROR) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 error: %s", this, t3_client_last_error(t3Stream));
