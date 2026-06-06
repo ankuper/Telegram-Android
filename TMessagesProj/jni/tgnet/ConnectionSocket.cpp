@@ -513,7 +513,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         }
 
         std::string endpointUrl = "https://" + t3Host + ":443" + t3Path;
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 connecting to %s", this, endpointUrl.c_str());
+        __android_log_print(ANDROID_LOG_INFO, "T3Native", "Type3 creating stream: url=%s keyLen=%d",
+            endpointUrl.c_str(), (int)t3Key.size());
 
         t3Cleanup();
         t3_result_t rc = t3_client_create(
@@ -522,14 +523,17 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             0,
             &t3Stream
         );
+        __android_log_print(ANDROID_LOG_INFO, "T3Native", "Type3 t3_client_create rc=%d stream=%p",
+            rc, t3Stream);
         if (rc != T3_OK || t3Stream == nullptr) {
-            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 t3_client_create failed: %d", this, rc);
+            __android_log_print(ANDROID_LOG_ERROR, "T3Native", "Type3 create FAILED rc=%d", rc);
             closeSocket(1, -1);
             return;
         }
         socketFd = t3_client_get_fd(t3Stream);
+        __android_log_print(ANDROID_LOG_INFO, "T3Native", "Type3 fd=%d", socketFd);
         if (socketFd < 0) {
-            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 get_fd returned -1", this);
+            __android_log_print(ANDROID_LOG_ERROR, "T3Native", "Type3 get_fd returned -1");
             t3Cleanup();
             closeSocket(1, -1);
             return;
