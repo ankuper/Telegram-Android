@@ -512,7 +512,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             t3Path = "/";
         }
 
-        std::string endpointUrl = "wss://" + t3Host + ":443" + t3Path;
+        std::string endpointUrl = "https://" + t3Host + ":443" + t3Path;
         __android_log_print(ANDROID_LOG_INFO, "T3Native", "Type3 creating stream: url=%s keyLen=%d",
             endpointUrl.c_str(), (int)t3Key.size());
 
