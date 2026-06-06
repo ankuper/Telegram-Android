@@ -31,6 +31,7 @@
 #include "BuffersStorage.h"
 #include "Connection.h"
 #include <random>
+#include <android/log.h>
 
 #ifndef EPOLLRDHUP
 #define EPOLLRDHUP 0x2000
@@ -495,6 +496,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     }
 
     /* === TYPE3-PROXY BEGIN === */
+    __android_log_print(ANDROID_LOG_INFO, "T3Native", "openConnection: proxySecret size=%d first=0x%02x addr=%s",
+        (int)proxySecret->size(), proxySecret->empty() ? 0 : (uint8_t)(*proxySecret)[0], proxyAddress->c_str());
     if (!proxySecret->empty() && proxySecret->size() > 17 && (uint8_t)(*proxySecret)[0] == 0xff) {
         std::string t3Key = proxySecret->substr(1, 16);
         std::string t3Domain = proxySecret->substr(17);
