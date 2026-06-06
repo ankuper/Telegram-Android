@@ -805,18 +805,14 @@ void ConnectionSocket::onEvent(uint32_t events) {
             }
             if (events & EPOLLOUT) {
                 if (outgoingByteStream->hasData()) {
-                    NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
-                    buffer->clear();
-                    outgoingByteStream->get(buffer);
-                    buffer->flip();
-                    uint32_t remaining = buffer->remaining();
-                    if (remaining) {
-                        t3_result_t rc = t3_client_write(t3Stream, buffer->bytes(), remaining);
-                        if (rc != T3_OK && rc != T3_ERR_BUF_TOO_SMALL) {
-                            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 write error: %d", this, rc);
-                            closeSocket(1, -1);
-                            return;
-                        }
+                    NativeByteBuffer *buf = BuffersStorage::getInstance().getFreeBuffer(outgoingByteStream->available());
+                    outgoingByteStream->get(buf);
+                    t3_result_t rc = t3_client_write(t3Stream, buf->bytes(), buf->limit());
+                    buf->reuse();
+                    if (rc != T3_OK && rc != T3_ERR_BUF_TOO_SMALL) {
+                        if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 write error: %d", this, rc);
+                        closeSocket(1, -1);
+                        return;
                     }
                 }
                 adjustWriteOp();
