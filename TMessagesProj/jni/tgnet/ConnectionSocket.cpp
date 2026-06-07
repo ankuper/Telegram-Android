@@ -799,11 +799,12 @@ void ConnectionSocket::onEvent(uint32_t events) {
                     buffer->rewind();
                     size_t outLen = 0;
                     t3_result_t rc = t3_client_read(t3Stream, buffer->bytes(), READ_BUFFER_SIZE, &outLen);
+                    __android_log_print(ANDROID_LOG_INFO, "T3Native", "read: rc=%d outLen=%zu", rc, outLen);
                     if (rc == T3_ERR_BUF_TOO_SMALL || outLen == 0) {
                         break;
                     }
                     if (rc != T3_OK) {
-                        if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 read error: %d", this, rc);
+                        __android_log_print(ANDROID_LOG_ERROR, "T3Native", "read ERROR: rc=%d err=%s", rc, t3_client_last_error(t3Stream));
                         closeSocket(1, -1);
                         return;
                     }
@@ -831,7 +832,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 adjustWriteOp();
             }
             if (events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
-                if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 disconnect event", this);
+                __android_log_print(ANDROID_LOG_WARN, "T3Native", "disconnect event=0x%x", events);
                 closeSocket(1, -1);
             }
             return;
