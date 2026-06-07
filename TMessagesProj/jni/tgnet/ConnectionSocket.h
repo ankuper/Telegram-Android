@@ -88,6 +88,7 @@ private:
 
     /* === TYPE3-PROXY BEGIN === */
     t3_client_stream *t3Stream = nullptr;
+    int16_t t3DcId = 0;
     void t3Cleanup();
     /* === TYPE3-PROXY END === */
 

@@ -520,7 +520,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         t3_result_t rc = t3_client_create(
             endpointUrl.c_str(),
             (const uint8_t *)t3Key.data(),
-            0,
+            t3DcId,
             &t3Stream
         );
         __android_log_print(ANDROID_LOG_INFO, "T3Native", "Type3 t3_client_create rc=%d stream=%p",

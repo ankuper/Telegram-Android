@@ -364,6 +364,9 @@ void Connection::connect() {
     lastPacketLength = 0;
     wasConnected = false;
     hasSomeDataSinceLastConnect = false;
+    /* === TYPE3-PROXY BEGIN === */
+    t3DcId = (int16_t)currentDatacenter->getDatacenterId();
+    /* === TYPE3-PROXY END === */
     openConnection(hostAddress, hostPort, secret, ipv6 != 0, ConnectionsManager::getInstance(currentDatacenter->instanceNum).currentNetworkType);
     if (connectionType == ConnectionTypeProxy) {
         setTimeout(5);
