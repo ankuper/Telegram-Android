@@ -793,6 +793,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
             return;
         }
         if (proxyAuthState == 21) {
+            t3_client_pump(t3Stream);
             if (events & EPOLLIN) {
                 NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
                 while (true) {
