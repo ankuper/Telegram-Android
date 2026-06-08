@@ -467,9 +467,21 @@ void Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
     /* === TYPE3-PROXY BEGIN === */
     /* Type3 transport: libteleproto3 t3_client_write() handles ALL framing —
        obfs2 init, AES-CTR, 4-byte intermediate length prefix, padding, HTTP chunks.
-       Send raw MTProto payload; do NOT add length prefix (lib does it). */
+       Send raw MTProto payload; do NOT add length prefix (lib does it).
+
+       One MTProto message = one intermediate frame. t3_client_write() frames
+       exactly one message per call, so write each message directly instead of
+       queueing into outgoingByteStream and flushing the whole stream at once:
+       bundling two messages into a single t3_client_write would wrap them in
+       ONE frame and the server (one message per frame) drops the second — e.g.
+       req_DH_params bundled with a retried req_pq → no server_DH_params reply. */
     if (t3Stream != nullptr) {
-        writeBuffer(buff);
+        if (t3_client_get_state(t3Stream) == T3_CLIENT_STATE_READY) {
+            t3_client_write(t3Stream, buff->bytes(), buff->limit());
+        } else {
+            /* Pre-ready: queue the lone initial req_pq; flushed once ready. */
+            writeBuffer(buff);
+        }
         buff->reuse();
         return;
     }

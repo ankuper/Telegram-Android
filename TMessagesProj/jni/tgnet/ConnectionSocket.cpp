@@ -785,6 +785,13 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 handshake complete, ready", this);
                 proxyAuthState = 21;
                 onConnectedSent = true;
+                /* Type3: discard any handshake data (req_pq) queued before the
+                   transport was ready. onConnected() below re-runs the MTProto
+                   handshake, queueing a single fresh req_pq. Without this clear,
+                   BOTH the pre-ready req_pq and the re-begin req_pq (different
+                   nonces) reach the server, whose resPQ then echoes a stale
+                   nonce → permanent "invalid client nonce" loop. */
+                outgoingByteStream->clean();
                 onConnected();
                 adjustWriteOp();
             } else if (st == T3_CLIENT_STATE_ERROR) {
@@ -829,18 +836,17 @@ void ConnectionSocket::onEvent(uint32_t events) {
                     buffer->flip();
                     uint32_t remaining = buffer->remaining();
                     if (remaining) {
-                        __android_log_print(ANDROID_LOG_INFO, "T3Native", "write: %u bytes, first4: %02x %02x %02x %02x",
-                            remaining,
-                            remaining>0?((uint8_t*)buffer->bytes())[0]:0,
-                            remaining>1?((uint8_t*)buffer->bytes())[1]:0,
-                            remaining>2?((uint8_t*)buffer->bytes())[2]:0,
-                            remaining>3?((uint8_t*)buffer->bytes())[3]:0);
                         t3_result_t rc = t3_client_write(t3Stream, buffer->bytes(), remaining);
                         if (rc != T3_OK && rc != T3_ERR_BUF_TOO_SMALL) {
                             if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 write error: %d", this, rc);
                             closeSocket(1, -1);
                             return;
                         }
+                        /* t3_client_write() takes ownership of the whole buffer
+                           (queues internally). Discard the consumed bytes — else
+                           the same data is re-read and re-sent on every EPOLLOUT,
+                           flooding the server. */
+                        outgoingByteStream->discard(remaining);
                     }
                 }
                 adjustWriteOp();
