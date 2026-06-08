@@ -446,20 +446,12 @@ void Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
     }
 
     /* === TYPE3-PROXY BEGIN === */
-    /* Type3 transport: libteleproto3 handles obfs2 init, AES-CTR, and framing.
-       Send raw MTProto with 4-byte intermediate length prefix only. */
+    /* Type3 transport: libteleproto3 t3_client_write() handles ALL framing —
+       obfs2 init, AES-CTR, 4-byte intermediate length prefix, padding, HTTP chunks.
+       Send raw MTProto payload; do NOT add length prefix (lib does it). */
     if (t3Stream != nullptr) {
-        uint32_t dataSize = buff->remaining();
-        NativeByteBuffer *t3buf = BuffersStorage::getInstance().getFreeBuffer(dataSize + 4);
-        uint32_t wireLen = dataSize;
-        if (reportAck) {
-            wireLen |= (1u << 31);
-        }
-        t3buf->writeInt32(wireLen);
-        t3buf->writeBytes(buff);
+        writeBuffer(buff);
         buff->reuse();
-        writeBuffer(t3buf);
-        t3buf->reuse();
         return;
     }
     /* === TYPE3-PROXY END === */
