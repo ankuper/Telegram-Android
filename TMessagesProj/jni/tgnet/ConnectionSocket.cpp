@@ -780,6 +780,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
         if (proxyAuthState == 20) {
             t3_result_t rc = t3_client_pump(t3Stream);
             st = t3_client_get_state(t3Stream);
+            __android_log_print(ANDROID_LOG_INFO, "T3Native", "pump20: rc=%d state=%d", rc, st);
             if (st == T3_CLIENT_STATE_READY) {
                 if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 handshake complete, ready", this);
                 proxyAuthState = 21;
