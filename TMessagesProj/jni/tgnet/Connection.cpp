@@ -69,8 +69,27 @@ void Connection::suspendConnection(bool idle) {
 }
 
 void Connection::onReceivedData(NativeByteBuffer *buffer) {
+    /* === TYPE3-PROXY BEGIN === */
+    /* Type3: libteleproto3 already decrypted AES-CTR and deframed the
+       intermediate length prefix. The buffer holds one raw MTProto packet.
+       Skip tgnet's AES decrypt and protocol parsing — hand the packet
+       straight to the MTProto layer. */
+    if (t3Stream != nullptr) {
+        failedConnectionCount = 0;
+        if (!hasSomeDataSinceLastConnect) {
+            currentDatacenter->storeCurrentAddressAndPortNum();
+            isTryingNextPort = false;
+            hasSomeDataSinceLastConnect = true;
+        }
+        uint32_t pktLen = buffer->limit();
+        uint32_t current_generation = generation;
+        ConnectionsManager::getInstance(currentDatacenter->instanceNum).onConnectionDataReceived(this, buffer, pktLen);
+        return;
+    }
+    /* === TYPE3-PROXY END === */
+
     AES_ctr128_encrypt(buffer->bytes(), buffer->bytes(), buffer->limit(), &decryptKey, decryptIv, decryptCount, &decryptNum);
-    
+
     failedConnectionCount = 0;
 
     if (connectionType == ConnectionTypeGeneric || connectionType == ConnectionTypeTemp || connectionType == ConnectionTypeGenericMedia) {
