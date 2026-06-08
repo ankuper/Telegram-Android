@@ -793,7 +793,13 @@ void ConnectionSocket::onEvent(uint32_t events) {
             return;
         }
         if (proxyAuthState == 21) {
-            t3_client_pump(t3Stream);
+            t3_result_t pump_rc = t3_client_pump(t3Stream);
+            t3_client_state_t pump_st = t3_client_get_state(t3Stream);
+            if (pump_st == T3_CLIENT_STATE_ERROR) {
+                __android_log_print(ANDROID_LOG_ERROR, "T3Native", "pump21 ERROR: %s", t3_client_last_error(t3Stream));
+                closeSocket(1, -1);
+                return;
+            }
             if (events & EPOLLIN) {
                 NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
                 while (true) {
@@ -833,8 +839,15 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 adjustWriteOp();
             }
             if (events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
-                __android_log_print(ANDROID_LOG_WARN, "T3Native", "disconnect event=0x%x", events);
-                closeSocket(1, -1);
+                /* EPOLLRDHUP on TLS fd may just mean SSL has pending data.
+                   Pump once more and check state before disconnecting. */
+                t3_client_pump(t3Stream);
+                t3_client_state_t final_st = t3_client_get_state(t3Stream);
+                __android_log_print(ANDROID_LOG_WARN, "T3Native", "disconnect event=0x%x state=%d", events, final_st);
+                if (final_st == T3_CLIENT_STATE_ERROR || final_st == T3_CLIENT_STATE_CLOSED) {
+                    closeSocket(1, -1);
+                }
+                /* Otherwise ignore EPOLLRDHUP — SSL connection may still be alive */
             }
             return;
         }
