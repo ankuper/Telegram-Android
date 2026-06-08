@@ -828,6 +828,12 @@ void ConnectionSocket::onEvent(uint32_t events) {
                     buffer->flip();
                     uint32_t remaining = buffer->remaining();
                     if (remaining) {
+                        __android_log_print(ANDROID_LOG_INFO, "T3Native", "write: %u bytes, first4: %02x %02x %02x %02x",
+                            remaining,
+                            remaining>0?((uint8_t*)buffer->bytes())[0]:0,
+                            remaining>1?((uint8_t*)buffer->bytes())[1]:0,
+                            remaining>2?((uint8_t*)buffer->bytes())[2]:0,
+                            remaining>3?((uint8_t*)buffer->bytes())[3]:0);
                         t3_result_t rc = t3_client_write(t3Stream, buffer->bytes(), remaining);
                         if (rc != T3_OK && rc != T3_ERR_BUF_TOO_SMALL) {
                             if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 write error: %d", this, rc);
