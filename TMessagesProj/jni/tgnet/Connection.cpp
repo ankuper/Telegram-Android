@@ -487,11 +487,17 @@ void Connection::sendData(NativeByteBuffer *buff, bool reportAck, bool encrypted
     if (t3Stream != nullptr) {
         if (t3_client_get_state(t3Stream) == T3_CLIENT_STATE_READY) {
             t3_client_write(t3Stream, buff->bytes(), buff->limit());
+            /* t3_client_write() copies the bytes into its own queue; we still
+               own buff, so return it to the pool. */
+            buff->reuse();
         } else {
-            /* Pre-ready: queue the lone initial req_pq; flushed once ready. */
+            /* Pre-ready: queue the lone initial req_pq. writeBuffer() hands buff
+               to outgoingByteStream (ByteStream::append takes ownership), so DO
+               NOT reuse it here — doing so put the same buffer in both the send
+               queue and the free pool, corrupting a pooled NativeByteBuffer
+               (garbage _capacity) that later crashed createRequestsData. */
             writeBuffer(buff);
         }
-        buff->reuse();
         return;
     }
     /* === TYPE3-PROXY END === */
