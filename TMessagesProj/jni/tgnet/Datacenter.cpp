@@ -15,6 +15,7 @@
 #include <openssl/aes.h>
 #include <memory.h>
 #include <inttypes.h>
+#include <android/log.h>
 #include "Datacenter.h"
 #include "Connection.h"
 #include "MTProtoScheme.h"
