@@ -770,7 +770,6 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
 void ConnectionSocket::onEvent(uint32_t events) {
     /* === TYPE3-PROXY BEGIN === */
     if (t3Stream != nullptr) {
-        __android_log_print(ANDROID_LOG_INFO, "T3Native", "onEvent: events=0x%x proxyAuth=%d", events, proxyAuthState);
         t3_client_state_t st = t3_client_get_state(t3Stream);
         if (st == T3_CLIENT_STATE_ERROR) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 error: %s", this, t3_client_last_error(t3Stream));
@@ -778,9 +777,8 @@ void ConnectionSocket::onEvent(uint32_t events) {
             return;
         }
         if (proxyAuthState == 20) {
-            t3_result_t rc = t3_client_pump(t3Stream);
+            t3_client_pump(t3Stream);
             st = t3_client_get_state(t3Stream);
-            __android_log_print(ANDROID_LOG_INFO, "T3Native", "pump20: rc=%d state=%d", rc, st);
             if (st == T3_CLIENT_STATE_READY) {
                 if (LOGS_ENABLED) DEBUG_D("connection(%p) Type3 handshake complete, ready", this);
                 proxyAuthState = 21;
@@ -814,7 +812,6 @@ void ConnectionSocket::onEvent(uint32_t events) {
                     buffer->rewind();
                     size_t outLen = 0;
                     t3_result_t rc = t3_client_read(t3Stream, buffer->bytes(), READ_BUFFER_SIZE, &outLen);
-                    __android_log_print(ANDROID_LOG_INFO, "T3Native", "read: rc=%d outLen=%zu", rc, outLen);
                     if (rc == T3_ERR_BUF_TOO_SMALL || outLen == 0) {
                         break;
                     }
