@@ -31,7 +31,6 @@
 #include "BuffersStorage.h"
 #include "Connection.h"
 #include <random>
-#include <android/log.h>
 
 #ifndef EPOLLRDHUP
 #define EPOLLRDHUP 0x2000
@@ -496,8 +495,6 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     }
 
     /* === TYPE3-PROXY BEGIN === */
-    __android_log_print(ANDROID_LOG_INFO, "T3Native", "openConnection: proxySecret size=%d first=0x%02x addr=%s",
-        (int)proxySecret->size(), proxySecret->empty() ? 0 : (uint8_t)(*proxySecret)[0], proxyAddress->c_str());
     if (!proxySecret->empty() && proxySecret->size() > 17 && (uint8_t)(*proxySecret)[0] == 0xff) {
         std::string t3Key = proxySecret->substr(1, 16);
         std::string t3Domain = proxySecret->substr(17);
@@ -513,8 +510,6 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         }
 
         std::string endpointUrl = "https://" + t3Host + ":443" + t3Path;
-        __android_log_print(ANDROID_LOG_INFO, "T3Native", "Type3 creating stream: url=%s keyLen=%d",
-            endpointUrl.c_str(), (int)t3Key.size());
 
         t3Cleanup();
         t3_result_t rc = t3_client_create(
@@ -523,17 +518,14 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             t3DcId,
             &t3Stream
         );
-        __android_log_print(ANDROID_LOG_INFO, "T3Native", "Type3 t3_client_create rc=%d stream=%p",
-            rc, t3Stream);
         if (rc != T3_OK || t3Stream == nullptr) {
-            __android_log_print(ANDROID_LOG_ERROR, "T3Native", "Type3 create FAILED rc=%d", rc);
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 t3_client_create failed: %d", this, rc);
             closeSocket(1, -1);
             return;
         }
         socketFd = t3_client_get_fd(t3Stream);
-        __android_log_print(ANDROID_LOG_INFO, "T3Native", "Type3 fd=%d", socketFd);
         if (socketFd < 0) {
-            __android_log_print(ANDROID_LOG_ERROR, "T3Native", "Type3 get_fd returned -1");
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 get_fd returned -1", this);
             t3Cleanup();
             closeSocket(1, -1);
             return;
@@ -802,7 +794,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
             t3_result_t pump_rc = t3_client_pump(t3Stream);
             t3_client_state_t pump_st = t3_client_get_state(t3Stream);
             if (pump_st == T3_CLIENT_STATE_ERROR) {
-                __android_log_print(ANDROID_LOG_ERROR, "T3Native", "pump21 ERROR: %s", t3_client_last_error(t3Stream));
+                if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 pump error: %s", this, t3_client_last_error(t3Stream));
                 closeSocket(1, -1);
                 return;
             }
@@ -816,7 +808,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         break;
                     }
                     if (rc != T3_OK) {
-                        __android_log_print(ANDROID_LOG_ERROR, "T3Native", "read ERROR: rc=%d err=%s", rc, t3_client_last_error(t3Stream));
+                        if (LOGS_ENABLED) DEBUG_E("connection(%p) Type3 read error: %d %s", this, rc, t3_client_last_error(t3Stream));
                         closeSocket(1, -1);
                         return;
                     }
@@ -853,7 +845,6 @@ void ConnectionSocket::onEvent(uint32_t events) {
                    Pump once more and check state before disconnecting. */
                 t3_client_pump(t3Stream);
                 t3_client_state_t final_st = t3_client_get_state(t3Stream);
-                __android_log_print(ANDROID_LOG_WARN, "T3Native", "disconnect event=0x%x state=%d", events, final_st);
                 if (final_st == T3_CLIENT_STATE_ERROR || final_st == T3_CLIENT_STATE_CLOSED) {
                     closeSocket(1, -1);
                 }
