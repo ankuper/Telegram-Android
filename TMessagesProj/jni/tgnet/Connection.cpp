@@ -446,6 +446,15 @@ void Connection::setHasUsefullData() {
 }
 
 bool Connection::allowsCustomPadding() {
+    /* Type3 (libteleproto3) frames messages in the padded intermediate format:
+       each frame carries 0-15 bytes of trailing padding beyond the MTProto
+       message length. The receive path must tolerate that padding (it strips
+       (length-24)%16). currentProtocolType is never set for Type3 — sendData's
+       Type3 bypass returns before the obfs2 protocol-type assignment — so it
+       stays the default ProtocolTypeEE and this must special-case it, else every
+       padded message trips the "incorrect message length" check and reconnects
+       (~25 reconnects/sec churn that hangs every request). */
+    if (t3Stream != nullptr) return true;
     return currentProtocolType == ProtocolTypeTLS || currentProtocolType == ProtocolTypeDD || currentProtocolType == ProtocolTypeEF;
 }
 
