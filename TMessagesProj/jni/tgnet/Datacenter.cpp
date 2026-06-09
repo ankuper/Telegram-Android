@@ -1200,7 +1200,17 @@ NativeByteBuffer *Datacenter::createRequestsData(std::vector<std::unique_ptr<Net
     buffer->writeInt64(messageId);
     buffer->writeInt32(messageSeqNo);
     buffer->writeInt32(messageSize);
-    messageBody->serializeToStream(buffer);
+    {
+        uint32_t posBefore = buffer->position();
+        __android_log_print(6, "T3Crash", "createRequestsData: type=%s declaredSize=%u cap=%u",
+            typeid(*messageBody).name(), messageSize, buffer->capacity());
+        messageBody->serializeToStream(buffer);
+        uint32_t wrote = buffer->position() - posBefore;
+        if (wrote != messageSize) {
+            __android_log_print(6, "T3Crash", "SIZE MISMATCH! type=%s declared=%u actual=%u OVERFLOW",
+                typeid(*messageBody).name(), messageSize, wrote);
+        }
+    }
     if (freeMessageBody) {
         delete messageBody;
     }
