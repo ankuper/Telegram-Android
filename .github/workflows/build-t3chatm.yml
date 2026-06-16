@@ -35,7 +35,7 @@ jobs:
 
     - name: Build libteleproto3.a for Android ABIs
       run: |
-        git clone --depth=1 https://github.com/ankuper/teleproto3.git /tmp/teleproto3
+        git clone --branch v0.5.0 --depth=1 https://github.com/ankuper/teleproto3.git /tmp/teleproto3
         bash /tmp/teleproto3/ci/build-android.sh \
           --ndk "$NDK_ROOT" \
           --boringssl "$GITHUB_WORKSPACE/TMessagesProj/jni/boringssl" \
