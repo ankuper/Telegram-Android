@@ -33,31 +33,16 @@ jobs:
         sdkmanager --install "ndk;21.4.7075529"
         echo "NDK_ROOT=$ANDROID_SDK_ROOT/ndk/21.4.7075529" >> $GITHUB_ENV
 
-    - name: Download prebuilt libteleproto3 for Android ABIs
-      # Consume the prebuilt per-ABI static libs from the latest teleproto3
-      # GitHub Release — never build from source (single source of truth,
-      # CLAUDE.md). Each android archive holds lib/libteleproto3.a + lib/include/;
-      # the .a references BoringSSL symbols resolved at the app's final link
-      # against TMessagesProj/jni/boringssl.
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build libteleproto3.a for Android ABIs
       run: |
-        TAG=$(gh release view --repo ankuper/teleproto3 --json tagName -q .tagName)
-        echo "Consuming prebuilt libteleproto3 $TAG (android)"
-        DEST="$GITHUB_WORKSPACE/TMessagesProj/jni/teleproto3"
-        mkdir -p "$DEST/include"
-        for abi in arm64-v8a armeabi-v7a x86_64; do
-          gh release download "$TAG" --repo ankuper/teleproto3 \
-            --pattern "libteleproto3-android-${abi}.tar.gz" --output "/tmp/t3-${abi}.tgz"
-          rm -rf "/tmp/t3x-${abi}" && mkdir -p "/tmp/t3x-${abi}" "$DEST/${abi}"
-          tar xzf "/tmp/t3-${abi}.tgz" -C "/tmp/t3x-${abi}"
-          cp "/tmp/t3x-${abi}/lib/libteleproto3.a" "$DEST/${abi}/libteleproto3.a"
-        done
-        # Headers are arch-independent — install once from any ABI archive.
-        cp -R "/tmp/t3x-arm64-v8a/lib/include/." "$DEST/include/"
-        ls -lh "$DEST/arm64-v8a/libteleproto3.a" \
-               "$DEST/armeabi-v7a/libteleproto3.a" \
-               "$DEST/x86_64/libteleproto3.a"
+        git clone --branch v0.5.0 --depth=1 https://github.com/ankuper/teleproto3.git /tmp/teleproto3
+        bash /tmp/teleproto3/ci/build-android.sh \
+          --ndk "$NDK_ROOT" \
+          --boringssl "$GITHUB_WORKSPACE/TMessagesProj/jni/boringssl" \
+          --out "$GITHUB_WORKSPACE/TMessagesProj/jni/teleproto3"
+        ls -lh TMessagesProj/jni/teleproto3/arm64-v8a/libteleproto3.a \
+               TMessagesProj/jni/teleproto3/armeabi-v7a/libteleproto3.a \
+               TMessagesProj/jni/teleproto3/x86_64/libteleproto3.a
 
     - name: Build Standalone APK
       env:
