@@ -2,7 +2,6 @@ package org.telegram.voip.test
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 import org.telegram.messenger.Type3ShimController
 import org.telegram.messenger.voip.Instance
@@ -63,12 +62,6 @@ class Type3WiringTest {
 
     // ---- RED (@Ignore) — AC #4 `allowTCP` plumbed onto Java Instance.Config ----
 
-    @Ignore(
-        "ATDD 9-5 red-phase: remove @Ignore when implementing AC#4. Fails RED until " +
-        "Instance.Config exposes a public boolean `allowTCP` field that the JNI can " +
-        "marshal into tgcalls::Descriptor.config.allowTCP (Instance.h:113, consumed " +
-        "Manager.cpp:87)."
-    )
     @Test
     fun instanceConfig_exposesAllowTcpBooleanField() {
         // Today Instance.Config has no `allowTCP` field => getDeclaredField throws

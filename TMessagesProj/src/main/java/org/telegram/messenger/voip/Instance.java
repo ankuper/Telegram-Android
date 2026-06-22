@@ -146,6 +146,7 @@ public final class Instance {
         public final double receiveTimeout;
         public final int dataSaving;
         public final boolean enableP2p;
+        public final boolean allowTCP;
         public final boolean enableAec;
         public final boolean enableNs;
         public final boolean enableAgc;
@@ -161,6 +162,7 @@ public final class Instance {
             double receiveTimeout,
             int dataSaving,
             boolean enableP2p,
+            boolean allowTCP,
             boolean enableAec,
             boolean enableNs,
             boolean enableAgc,
@@ -175,6 +177,7 @@ public final class Instance {
             this.receiveTimeout = receiveTimeout;
             this.dataSaving = dataSaving;
             this.enableP2p = enableP2p;
+            this.allowTCP = allowTCP;
             this.enableAec = enableAec;
             this.enableNs = enableNs;
             this.enableAgc = enableAgc;
@@ -193,6 +196,7 @@ public final class Instance {
                     ", receiveTimeout=" + receiveTimeout +
                     ", dataSaving=" + dataSaving +
                     ", enableP2p=" + enableP2p +
+                    ", allowTCP=" + allowTCP +
                     ", enableAec=" + enableAec +
                     ", enableNs=" + enableNs +
                     ", enableAgc=" + enableAgc +
