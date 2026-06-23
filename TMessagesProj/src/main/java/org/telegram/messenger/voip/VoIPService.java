@@ -108,6 +108,7 @@ import org.telegram.messenger.MediaController;
 import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.MessagesStorage;
+import org.telegram.messenger.Type3ShimController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.NotificationsController;
 import org.telegram.messenger.R;
@@ -1892,6 +1893,19 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		return ApplicationLoader.isRoaming() ? Instance.DATA_SAVING_MOBILE : Instance.DATA_SAVING_NEVER;
 	}
 
+	/** Extract the HTTP path from a Type3 secret hex string (ff + 16-byte key + domain). */
+	private static String wsPathFromType3Secret(String secret) {
+		if (secret == null || secret.length() < 34) return "/";
+		try {
+			byte[] domainBytes = Utilities.hexToBytes(secret.substring(34));
+			String domain = new String(domainBytes, java.nio.charset.StandardCharsets.UTF_8);
+			int slashIdx = domain.indexOf('/');
+			return slashIdx >= 0 ? domain.substring(slashIdx) : "/";
+		} catch (Exception ignored) {
+			return "/";
+		}
+	}
+
 	public void migrateToChat(TLRPC.Chat newChat) {
 		chat = newChat;
 	}
@@ -1927,6 +1941,16 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 
 	private void startGroupCall(int ssrc, String json, boolean create) {
 		if (sharedInstance != this) {
+			return;
+		}
+		// Group calls are not supported over a Type3 proxy (TCP-only shim, no UDP-ASSOCIATE).
+		// Show a per-tap toast and short-circuit before any UDP socket gathering.
+		final SharedPreferences prefs = MessagesController.getGlobalMainSettings();
+		if (prefs.getBoolean("proxy_enabled", false) && prefs.getBoolean("proxy_enabled_calls", false)
+				&& Type3ShimController.isType3Secret(prefs.getString("proxy_secret", null))) {
+			AndroidUtilities.runOnUIThread(() ->
+				Toast.makeText(VoIPService.this, R.string.Type3GroupCallUnsupported, Toast.LENGTH_LONG).show()
+			);
 			return;
 		}
 		if (createGroupCall) {
@@ -3406,6 +3430,13 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 
 			final SharedPreferences preferences = MessagesController.getGlobalMainSettings();
 
+			// determine Type3 proxy early — needed for allowTCP in Config
+			final boolean proxyEnabledForCalls = preferences.getBoolean("proxy_enabled", false)
+					&& preferences.getBoolean("proxy_enabled_calls", false);
+			final String proxySecret = preferences.getString("proxy_secret", null);
+			final boolean isType3Proxy = proxyEnabledForCalls
+					&& Type3ShimController.isType3Secret(proxySecret);
+
 			// config
 			final MessagesController messagesController = MessagesController.getInstance(currentAccount);
 			final double initializationTimeout = messagesController.callConnectTimeout / 1000.0;
@@ -3416,7 +3447,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			final boolean enableNs = !(sysNsAvailable && serverConfig.useSystemNs);
 			final String logFilePath = BuildVars.DEBUG_VERSION ? VoIPHelper.getLogFilePath("voip" + privateCall.id) : VoIPHelper.getLogFilePath("" + privateCall.id, false);
 			final String statsLogFilePath = VoIPHelper.getLogFilePath("" + privateCall.id, true);
-			final Instance.Config config = new Instance.Config(initializationTimeout, receiveTimeout, voipDataSaving, privateCall.p2p_allowed, enableAec, enableNs, true, false, serverConfig.enableStunMarking, logFilePath, statsLogFilePath, privateCall.protocol.max_layer, privateCall.custom_parameters == null ? "" : privateCall.custom_parameters.data);
+			final Instance.Config config = new Instance.Config(initializationTimeout, receiveTimeout, voipDataSaving, privateCall.p2p_allowed, isType3Proxy, enableAec, enableNs, true, false, serverConfig.enableStunMarking, logFilePath, statsLogFilePath, privateCall.protocol.max_layer, privateCall.custom_parameters == null ? "" : privateCall.custom_parameters.data);
 			lastLogFilePath = logFilePath;
 
 			// persistent state
@@ -3450,10 +3481,15 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 
 			// proxy
 			Instance.Proxy proxy = null;
-			if (preferences.getBoolean("proxy_enabled", false) && preferences.getBoolean("proxy_enabled_calls", false)) {
+			if (proxyEnabledForCalls) {
 				final String server = preferences.getString("proxy_ip", null);
-				final String secret = preferences.getString("proxy_secret", null);
-				if (!TextUtils.isEmpty(server) && TextUtils.isEmpty(secret)) {
+				if (!TextUtils.isEmpty(server) && Type3ShimController.isType3Secret(proxySecret)) {
+					// Type3: start the SOCKS5-over-Type3 shim; point tgcalls at 127.0.0.1
+					final String wsPath = wsPathFromType3Secret(proxySecret);
+					if (Type3ShimController.start(server, preferences.getInt("proxy_port", 0), wsPath, proxySecret)) {
+						proxy = new Instance.Proxy("127.0.0.1", Type3ShimController.getPort(), Type3ShimController.getUser(), Type3ShimController.getPass());
+					}
+				} else if (!TextUtils.isEmpty(server) && TextUtils.isEmpty(proxySecret)) {
 					proxy = new Instance.Proxy(server, preferences.getInt("proxy_port", 0), preferences.getString("proxy_user", null), preferences.getString("proxy_pass", null));
 				}
 			}
@@ -4190,6 +4226,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 				Instance.FinalState state = tgVoip[CAPTURE_DEVICE_CAMERA].stop();
 				updateTrafficStats(tgVoip[CAPTURE_DEVICE_CAMERA], state.trafficStats);
 				onTgVoipStop(state);
+				Type3ShimController.stop();
 			}
 			prevTrafficStats = null;
 			callStartTime = 0;
