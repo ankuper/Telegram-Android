@@ -107,7 +107,7 @@ android {
 
         multiDexEnabled true
 
-        // Default proxy mechanism (injected at build time; empty = no injection)
+        // T3ChatM default proxy (injected at build time; empty = no injection)
         buildConfigField "String", "T3_DEFAULT_PROXY_SERVER", "\"${project.findProperty('T3_DEFAULT_PROXY_SERVER') ?: ''}\""
         buildConfigField "int", "T3_DEFAULT_PROXY_PORT", "${project.findProperty('T3_DEFAULT_PROXY_PORT') ?: '0'}"
         buildConfigField "String", "T3_DEFAULT_PROXY_SECRET", "\"${project.findProperty('T3_DEFAULT_PROXY_SECRET') ?: ''}\""
