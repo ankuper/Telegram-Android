@@ -38,7 +38,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        TAG=$(gh release view --repo ankuper/teleproto3 --json tagName -q .tagName)
+        TAG=lib-v0.8.0
         echo "Consuming prebuilt libteleproto3 $TAG (android)"
         gh release download "$TAG" --repo ankuper/teleproto3 \
           --pattern 'libteleproto3-android.zip' --output /tmp/t3-android.zip
