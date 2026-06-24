@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@drawable/icon_background" />
-    <foreground android:drawable="@mipmap/icon_foreground" />
+    <!-- Full-bleed T3ChatM icon: the brick+plane lives in the BACKGROUND layer so
+         launchers (MIUI especially) render it edge-to-edge. In the foreground,
+         MIUI shrank it and framed it with a white tile. Foreground is empty. -->
+    <background android:drawable="@mipmap/icon_foreground" />
+    <foreground android:drawable="@android:color/transparent" />
     <monochrome android:drawable="@drawable/icon_plane" />
 </adaptive-icon>
